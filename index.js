@@ -2,9 +2,9 @@
 import express from "express";
 import cors from "cors" ; 
 // import passport from "passport";
-// import { googleAuthRoutes } from "./auth/google";
+import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
-// import "./auth/passport";
+import passport from "./Routes/auth/passport.js"; // ✅ Passport import karo
 // import { project } from "./projects/project";
 import { db } from "./db.js";
 import dotenv from "dotenv";
@@ -23,10 +23,11 @@ app.use(
   })
 );
 
-// app.use(passport.initialize());
-// app.use(passport.session());
+app.use(passport.initialize());
+app.use(passport.session());
 
 app.use("/auth", auth);
+app.use("/auth", googleAuthRoutes);
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");
