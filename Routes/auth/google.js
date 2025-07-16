@@ -1,4 +1,4 @@
-import express, { Request, Response } from "express";
+import express from "express";
 import passport from "passport";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
