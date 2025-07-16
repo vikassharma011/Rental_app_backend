@@ -4,7 +4,7 @@ import cors from "cors" ;
 // import passport from "passport";
 import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
-import passport from "./Routes/auth/passport.js"; // ✅ Passport import karo
+import  "./Routes/auth/passport.js"; // ✅ Passport import karo
 // import { project } from "./projects/project";
 import { db } from "./db.js";
 import dotenv from "dotenv";
@@ -20,6 +20,14 @@ app.use(
     credentials: true, // ✅ Cookies aur authentication ke liye zaroori hai
     methods: "GET, POST, PUT, DELETE",
     allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+app.use(
+  session({
+    secret: "your-secret",
+    resave: false,
+    saveUninitialized: true,
   })
 );
 
