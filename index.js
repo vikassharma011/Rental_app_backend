@@ -6,6 +6,7 @@ import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
 import  "./Routes/auth/passport.js"; // ✅ Passport import karo
 // import { project } from "./projects/project";
+import session from "express-session";
 import { db } from "./db.js";
 import dotenv from "dotenv";
 
@@ -13,16 +14,22 @@ dotenv.config();
 
 const app = express();
 
+app.use(cors({
+  origin: "http://localhost:3000",
+  credentials: true,
+  methods: "GET, POST, PUT, DELETE, OPTIONS", 
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
+
 app.use(express.json());
+
 app.use(
-  cors({
-    origin: "http://localhost:3000", // ✅ React frontend ka origin specify karo
-    credentials: true, // ✅ Cookies aur authentication ke liye zaroori hai
-    methods: "GET, POST, PUT, DELETE",
-    allowedHeaders: ["Content-Type", "Authorization"],
+  session({
+    secret: "your-secret",
+    resave: false,
+    saveUninitialized: true,
   })
 );
-
 
 app.use(passport.initialize());
 app.use(passport.session());
