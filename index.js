@@ -1,7 +1,7 @@
 // src/index.ts
 import express from "express";
 import cors from "cors" ; 
-// import passport from "passport";
+import * as passport from "passport";
 import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
 import  "./Routes/auth/passport.js"; // ✅ Passport import karo
