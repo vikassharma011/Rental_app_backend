@@ -4,7 +4,7 @@ import { authenticateInvestor } from "../../middlewares/authenticateInvestor.js"
 
 const router = express.Router();
 
-router.use(authenticateInvestor);
+// router.use(authenticateInvestor);
 
 router.post("/add/property", async (req, res) => {
   try {
