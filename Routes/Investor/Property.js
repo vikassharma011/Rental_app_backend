@@ -15,8 +15,6 @@ router.post("/add/property", async (req, res) => {
       city,
       state,
       zip_code,
-      created_at,
-      updated_at,
       description,
       investor_id,
     } = req.body;
@@ -28,7 +26,7 @@ router.post("/add/property", async (req, res) => {
     const [result] = await db.execute(
       `INSERT INTO properties (
         title, image, address, city, state, zip_code,
-        investor_id, created_at, updated_at, description
+        investor_id, description
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
@@ -38,8 +36,6 @@ router.post("/add/property", async (req, res) => {
         state,
         zip_code,
         investor_id,
-        created_at,
-        updated_at,
         description,
       ]
     );
