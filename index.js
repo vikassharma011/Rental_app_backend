@@ -7,7 +7,7 @@ const passport = require('passport');
 import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
 import  "./Routes/auth/passport.js"; // ✅ Passport import karo
-// import { project } from "./projects/project";
+import { PropertyRouter } from "./Routes/Investor/Property.js";
 import session from "express-session";
 import { db } from "./db.js";
 import dotenv from "dotenv";
@@ -38,6 +38,7 @@ app.use(passport.session());
 
 app.use("/auth", auth);
 app.use("/auth", googleAuthRoutes);
+app.use("/investor", PropertyRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");
