@@ -27,7 +27,7 @@ router.post("/add/property", async (req, res) => {
       `INSERT INTO property (
         title, image_url, address, city, state, zip_code,
         investor_id, description
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         title,
         image,
