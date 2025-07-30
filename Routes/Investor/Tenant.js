@@ -5,7 +5,7 @@ import { authenticateInvestor } from "../../middlewares/authenticateInvestor.js"
 const router = express.Router();
 
 // ✅ GET /admin/tenants?search=...
-router.get("/tenants", async (req, res) => {
+router.get("/tenant", async (req, res) => {
   const search = req.query.search;
   try {
     const baseQuery = `
@@ -26,7 +26,7 @@ router.get("/tenants", async (req, res) => {
 });
 
 // ✅ GET /admin/tenants/:id
-router.get("/tenants/:id", async (req, res) => {
+router.get("/tenant/:id", async (req, res) => {
   const { id } = req.params;
   try {
     const [rows] = await db.execute(
@@ -46,7 +46,7 @@ router.get("/tenants/:id", async (req, res) => {
 });
 
 // ✅ POST /admin/tenants — assign property to tenant
-router.post("/tenants", async (req, res) => {
+router.post("/tenant", async (req, res) => {
   const { tenant_id, property_id, lease_start, lease_end, rent_amount } = req.body;
   if (!tenant_id || !property_id) {
     return res.status(400).json({ error: "Missing tenant_id or property_id" });
@@ -68,7 +68,7 @@ router.post("/tenants", async (req, res) => {
 });
 
 // ✅ PATCH /admin/tenants/:id/status
-router.patch("/tenants/:id/status", async (req, res) => {
+router.patch("/tenant/:id/status", async (req, res) => {
   const { is_active } = req.body;
   const { id } = req.params;
   try {
