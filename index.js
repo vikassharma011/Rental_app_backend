@@ -11,6 +11,7 @@ import { PropertyRouter } from "./Routes/Investor/Property.js";
 import session from "express-session";
 import { db } from "./db.js";
 import dotenv from "dotenv";
+import { TenantRouter } from "./Routes/Investor/Tenant.js";
 
 dotenv.config();
 
@@ -39,6 +40,7 @@ app.use(passport.session());
 app.use("/auth", auth);
 app.use("/auth", googleAuthRoutes);
 app.use("/investor", PropertyRouter);
+app.use("/tenant" , TenantRouter) ; 
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");
