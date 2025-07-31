@@ -1,9 +1,7 @@
 import express from "express";
 import { db } from "../../db.js";
-import { authenticateInvestor } from "./authMiddleware.js";
 
 const router = express.Router();
-router.use(authenticateInvestor);
 
 // GET tenants
 router.get("/tenant", async (req, res) => {
