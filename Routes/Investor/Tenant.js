@@ -7,24 +7,35 @@ router.use(authenticateInvestor);
 
 // GET tenants
 router.get("/tenant", async (req, res) => {
-  const { search } = req.query;
-  const investorId = req.user.userId;
-  const baseSQL = `
+  const { search, userId } = req.query;
+
+  if (!userId) return res.status(400).json({ message: "userId is required" });
+
+  let baseSQL = `
     SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
            l.start_date, l.end_date, l.rent_amount, u.is_active
-      FROM users u
-      JOIN leases l ON u.user_id = l.tenant_id
-      JOIN properties p ON l.property_id = p.property_id
-      WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
+    FROM users u
+    JOIN leases l ON u.user_id = l.tenant_id
+    JOIN properties p ON l.property_id = p.property_id
+    WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
   `;
-  const params = [investorId];
+
+  const params = [userId];
+
   if (search) {
-    params.push(`%${search}%`, `%${search}%`);
     baseSQL += ` AND (u.first_name LIKE ? OR u.email LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
   }
-  const [rows] = await db.execute(baseSQL, params);
-  res.json(rows);
+
+  try {
+    const [rows] = await db.execute(baseSQL, params);
+    res.json(rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: "Database error" });
+  }
 });
+
 
 // GET tenant requests
 router.get("/tenant-requests", async (req, res) => {
