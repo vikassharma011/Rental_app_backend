@@ -14,7 +14,7 @@ router.get("/tenant", async (req, res) => {
            l.start_date, l.end_date, l.rent_amount, u.is_active
     FROM users u
     JOIN leases l ON u.user_id = l.tenant_id
-    JOIN properties p ON l.property_id = p.property_id
+    JOIN property p ON l.property_id = p.property_id
     WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
   `;
 
