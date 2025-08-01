@@ -10,7 +10,7 @@ dotenv.config();
 // GET tenants
 router.get("/tenant", async (req, res) => {
   try {
-    const authHeader = req.headers.Authorization;
+    const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return res.status(401).json({ message: "Authorization token missing or invalid" });
