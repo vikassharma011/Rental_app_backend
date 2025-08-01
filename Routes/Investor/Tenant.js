@@ -58,7 +58,7 @@ router.get("/tenant-requests", async (req, res) => {
 
 
 // ✅ Approve or Reject Tenant
-router.put("/tenant-requests/:id/:action", async (req, res) => {
+router.post("/tenant-requests/:id/:action", async (req, res) => {
   const { id, action } = req.params;
   if (action === "approve") {
     await db.execute(`UPDATE users SET is_active = true, status = 'approved' WHERE user_id = ?`, [id]);
@@ -80,13 +80,13 @@ router.post("/tenant", async (req, res) => {
   res.status(201).json({ success: true });
 });
 
-// // ✅ Toggle Tenant Active Status
-// router.patch("/tenant/:id/status", async (req, res) => {
-//   const { is_active } = req.body;
-//   const { id } = req.params;
-//   await db.execute(`UPDATE users SET is_active = ? WHERE user_id = ?`, [is_active, id]);
-//   res.json({ success: true });
-// });
+// ✅ Toggle Tenant Active Status
+router.put("/tenant/:id/status", async (req, res) => {
+  const { is_active } = req.body;
+  const { id } = req.params;
+  await db.execute(`UPDATE users SET is_active = ? WHERE user_id = ?`, [is_active, id]);
+  res.json({ success: true });
+});
 
 router.get("/properties", authenticateInvestor, async (req, res) => {
   const investorId = req.user.userId;
