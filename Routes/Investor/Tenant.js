@@ -46,31 +46,28 @@ router.get("/tenant", async (req, res) => {
 });
 
 
-
-// GET tenant requests
+// ✅ GET Tenant Requests (Inactive)
 router.get("/tenant-requests", async (req, res) => {
-  const investorId = req.user.userId;
   const [rows] = await db.execute(
-    `SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone
-       FROM users u
-       WHERE u.role = 'tenant' AND u.is_active = false`,
-    []
+    `SELECT user_id, first_name, last_name, email, phone FROM users 
+     WHERE role = 'tenant' AND is_active = false`
   );
   res.json(rows);
 });
 
-// POST approve/reject
+
+// ✅ Approve or Reject Tenant
 router.post("/tenant-requests/:id/:action", async (req, res) => {
   const { id, action } = req.params;
   if (action === "approve") {
-    await db.execute(`UPDATE users SET is_active = true WHERE user_id = ?`, [id]);
+    await db.execute(`UPDATE users SET is_active = true, status = 'approved' WHERE user_id = ?`, [id]);
   } else {
     await db.execute(`DELETE FROM users WHERE user_id = ? AND role = 'tenant'`, [id]);
   }
   res.json({ success: true, action });
 });
 
-// POST add tenant
+// ✅ Add Tenant to Lease
 router.post("/tenant", async (req, res) => {
   const { tenant_id, property_id, lease_start, lease_end, rent_amount } = req.body;
   await db.execute(
@@ -82,7 +79,7 @@ router.post("/tenant", async (req, res) => {
   res.status(201).json({ success: true });
 });
 
-// PATCH status
+// ✅ Toggle Tenant Active Status
 router.patch("/tenant/:id/status", async (req, res) => {
   const { is_active } = req.body;
   const { id } = req.params;
@@ -90,11 +87,11 @@ router.patch("/tenant/:id/status", async (req, res) => {
   res.json({ success: true });
 });
 
-// GET properties
+// ✅ Get Investor Properties
 router.get("/properties", async (req, res) => {
   const investorId = req.user.userId;
   const [rows] = await db.execute(
-    `SELECT property_id, address, city, state FROM properties WHERE investor_id = ?`,
+    `SELECT property_id, title, address, city, state FROM property WHERE investor_id = ?`,
     [investorId]
   );
   res.json(rows);
