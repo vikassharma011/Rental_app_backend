@@ -58,7 +58,7 @@ router.get("/tenant-requests", async (req, res) => {
 
 
 // ✅ Approve or Reject Tenant
-router.patch("/tenant-requests/:id/:action", async (req, res) => {
+router.post("/tenant-requests/:id/:action", async (req, res) => {
   const { id, action } = req.params;
   if (action === "approve") {
     await db.execute(`UPDATE users SET is_active = true, status = 'approved' WHERE user_id = ?`, [id]);
