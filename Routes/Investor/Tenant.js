@@ -1,7 +1,10 @@
 import express from "express";
+import dotenv from "dotenv";
 import { db } from "../../db.js";
 
 const router = express.Router();
+
+dotenv.config();
 
 // GET tenants
 router.get("/tenant", async (req, res) => {
