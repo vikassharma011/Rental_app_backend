@@ -18,8 +18,18 @@ router.get("/tenant", async (req, res) => {
 
     const token = authHeader.split(" ")[1];
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET); // Make sure JWT_SECRET is in your .env
-    const userId = decoded.userId;
+    let decoded;
+try {
+  decoded = jwt.verify(token, process.env.JWT_SECRET);
+} catch (err) {
+  return res.status(401).json({ message: "Invalid or expired token" });
+}
+
+if (!decoded || !decoded.userId) {
+  return res.status(401).json({ message: "Invalid token payload" });
+}
+
+const userId = decoded.userId;
 
     let baseSQL = `
       SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
