@@ -1,7 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { db } from "../../db.js";
-import { verifyToken } from "../../middlewares/authenticateInvestor.js";
+import { authenticateInvestor } from "../../middlewares/authenticateInvestor.js";
 import jwt from "jsonwebtoken";
 
 const router = express.Router();
@@ -88,7 +88,7 @@ router.patch("/tenant/:id/status", async (req, res) => {
   res.json({ success: true });
 });
 
-router.get("/properties", verifyToken, async (req, res) => {
+router.get("/properties", authenticateInvestor, async (req, res) => {
   const investorId = req.user.userId;
 
   const [rows] = await db.execute(
