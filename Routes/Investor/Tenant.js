@@ -1,48 +1,36 @@
 import express from "express";
-import dotenv from "dotenv";
 import { db } from "../../db.js";
-import jwt from "jsonwebtoken";
 
 const router = express.Router();
 
-dotenv.config();
-
 // GET tenants
 router.get("/tenant", async (req, res) => {
+  const { search, userId } = req.query;
+
+  if (!userId) return res.status(400).json({ message: "userId is required" });
+
+  let baseSQL = `
+    SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
+           l.start_date, l.end_date, l.rent_amount, u.is_active
+    FROM users u
+    JOIN leases l ON u.user_id = l.tenant_id
+    JOIN property p ON l.property_id = p.property_id
+    WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
+  `;
+
+  const params = [userId];
+
+  if (search) {
+    baseSQL += ` AND (u.first_name LIKE ? OR u.email LIKE ?)`;
+    params.push(`%${search}%`, `%${search}%`);
+  }
+
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "Authorization token missing or invalid" });
-    }
-
-    const token = authHeader.split(" ")[1];
-
-    const decoded = jwt.verify(token, process.env.JWT_SECRET); // Make sure JWT_SECRET is in your .env
-    const userId = decoded.userId;
-
-    let baseSQL = `
-      SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
-             l.start_date, l.end_date, l.rent_amount, u.is_active
-      FROM users u
-      JOIN leases l ON u.user_id = l.tenant_id
-      JOIN property p ON l.property_id = p.property_id
-      WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
-    `;
-
-    const params = [userId];
-
-    if (req.query.search) {
-      baseSQL += ` AND (u.first_name LIKE ? OR u.email LIKE ?)`;
-      const searchTerm = `%${req.query.search}%`;
-      params.push(searchTerm, searchTerm);
-    }
-
     const [rows] = await db.execute(baseSQL, params);
     res.json(rows);
   } catch (err) {
-    console.error("Fetch tenants error:", err);
-    res.status(500).json({ message: "Internal server error" });
+    console.error(err);
+    res.status(500).json({ message: "Database error" });
   }
 });
 
