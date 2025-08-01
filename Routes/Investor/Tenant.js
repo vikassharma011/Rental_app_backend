@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import { db } from "../../db.js";
+import { verifyToken } from "../../middlewares/authenticateInvestor.js";
 import jwt from "jsonwebtoken";
 
 const router = express.Router();
@@ -87,13 +88,16 @@ router.patch("/tenant/:id/status", async (req, res) => {
   res.json({ success: true });
 });
 
-// ✅ Get Investor Properties
-router.get("/properties", async (req, res) => {
+router.get("/properties", verifyToken, async (req, res) => {
   const investorId = req.user.userId;
+
   const [rows] = await db.execute(
-    `SELECT property_id, title, address, city, state FROM property WHERE investor_id = ?`,
+    `SELECT property_id, title, address, city, state 
+     FROM property 
+     WHERE investor_id = ?`,
     [investorId]
   );
+
   res.json(rows);
 });
 
