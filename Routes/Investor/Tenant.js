@@ -17,27 +17,16 @@ router.get("/tenant", async (req, res) => {
     }
 
     const token = authHeader.split(" ")[1];
-
-    let decoded;
-try {
-  decoded = jwt.verify(token, process.env.JWT_SECRET);
-} catch (err) {
-  return res.status(401).json({ message: "Invalid or expired token" });
-}
-
-if (!decoded || !decoded.userId) {
-  return res.status(401).json({ message: "Invalid token payload" });
-}
-
-const userId = decoded.userId;
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const userId = decoded.userId;
 
     let baseSQL = `
       SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
-             l.start_date, l.end_date, l.rent_amount, u.is_active
+             l.start_date, l.end_date, l.rent_amount, u.status, u.is_active
       FROM users u
       JOIN leases l ON u.user_id = l.tenant_id
       JOIN property p ON l.property_id = p.property_id
-      WHERE p.investor_id = ? AND l.end_date >= CURRENT_DATE
+      WHERE p.investor_id = ?
     `;
 
     const params = [userId];
@@ -55,6 +44,7 @@ const userId = decoded.userId;
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 
 
 // GET tenant requests
