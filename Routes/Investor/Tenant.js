@@ -101,4 +101,60 @@ router.get("/properties", authenticateInvestor, async (req, res) => {
   res.json(rows);
 });
 
+// ✅ Get a Single Tenant by ID
+router.get("/tenant/:id", async (req, res) => {
+  try {
+    const tenantId = req.params.id;
+
+    const [rows] = await db.execute(
+      `SELECT 
+        u.user_id,
+        u.first_name,
+        u.last_name,
+        u.email,
+        u.phone,
+        u.status,
+        u.is_active,
+        l.start_date AS lease_start,
+        l.end_date AS lease_end,
+        l.rent_amount,
+        l.rent_paid,
+        p.title AS property_name,
+        p.address AS property_address
+      FROM users u
+      JOIN leases l ON u.user_id = l.tenant_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE u.user_id = ?
+      LIMIT 1`,
+      [tenantId]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({ message: "Tenant not found" });
+    }
+
+    const tenant = rows[0];
+
+    res.json({
+      user_id: tenant.user_id,
+      name: `${tenant.first_name} ${tenant.last_name}`,
+      email: tenant.email,
+      phone: tenant.phone,
+      status: tenant.status,
+      is_active: tenant.is_active,
+      leaseStart: tenant.lease_start,
+      leaseEnd: tenant.lease_end,
+      rentDue: tenant.rent_amount,
+      rentPaid: tenant.rent_paid || 0,
+      property: tenant.property_name,
+      address: tenant.property_address,
+      profileImage: `https://api.dicebear.com/7.x/thumbs/svg?seed=${tenant.user_id}`
+    });
+  } catch (error) {
+    console.error("Error fetching tenant by ID:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+});
+
+
 export { router as TenantRouter };
