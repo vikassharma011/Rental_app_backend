@@ -118,7 +118,6 @@ router.get("/tenant/:id", async (req, res) => {
         l.start_date AS lease_start,
         l.end_date AS lease_end,
         l.rent_amount,
-        l.rent_paid,
         p.title AS property_name,
         p.address AS property_address
       FROM users u
@@ -145,7 +144,6 @@ router.get("/tenant/:id", async (req, res) => {
       leaseStart: tenant.lease_start,
       leaseEnd: tenant.lease_end,
       rentDue: tenant.rent_amount,
-      rentPaid: tenant.rent_paid || 0,
       property: tenant.property_name,
       address: tenant.property_address,
       profileImage: `https://api.dicebear.com/7.x/thumbs/svg?seed=${tenant.user_id}`
@@ -155,6 +153,7 @@ router.get("/tenant/:id", async (req, res) => {
     res.status(500).json({ message: "Internal server error" });
   }
 });
+
 
 
 export { router as TenantRouter };
