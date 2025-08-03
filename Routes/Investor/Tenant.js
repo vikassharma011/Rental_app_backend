@@ -154,6 +154,23 @@ router.get("/tenant/:id", async (req, res) => {
   }
 });
 
+// GET /tenant/available-tenants
+router.get("/available-tenants", authenticateToken, async (req, res) => {
+  try {
+    const tenants = await db.query(`
+      SELECT * FROM users
+      WHERE role = 'tenant'
+      AND user_id NOT IN (
+        SELECT tenant_id FROM leases WHERE CURRENT_DATE BETWEEN lease_start AND lease_end
+      )
+    `);
+    res.json(tenants.rows);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to fetch available tenants" });
+  }
+});
+
 
 
 export { router as TenantRouter };
