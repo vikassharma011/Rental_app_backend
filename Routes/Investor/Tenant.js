@@ -157,19 +157,20 @@ router.get("/tenant/:id", async (req, res) => {
 // GET /tenant/available-tenants
 router.get("/available-tenants", authenticateInvestor, async (req, res) => {
   try {
-    const tenants = await db.execute(`
+    const [rows] = await db.execute(`
       SELECT * FROM users
       WHERE role = 'tenant'
       AND user_id NOT IN (
-        SELECT tenant_id FROM leases WHERE CURRENT_DATE BETWEEN lease_start AND lease_end
+        SELECT tenant_id FROM leases WHERE CURRENT_DATE BETWEEN start_date AND end_date
       )
     `);
-    res.json(tenants.rows);
+    res.json(rows);
   } catch (err) {
-    console.error(err);
+    console.error("❌ Fetch tenants error:", err);
     res.status(500).json({ error: "Failed to fetch available tenants" });
   }
 });
+
 
 
 
