@@ -71,14 +71,41 @@ router.post("/tenant-requests/:id/:action", async (req, res) => {
 // ✅ Add Tenant to Lease
 router.post("/tenant", async (req, res) => {
   const { tenant_id, property_id, lease_start, lease_end, rent_amount } = req.body;
-  await db.execute(
-    `INSERT INTO leases (tenant_id, property_id, start_date, end_date, rent_amount, due_date, late_fee, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, 1, 0, NOW(), NOW())`,
-    [tenant_id, property_id, lease_start, lease_end, rent_amount]
-  );
-  await db.execute(`UPDATE users SET is_active = true WHERE user_id = ?`, [tenant_id]);
-  res.status(201).json({ success: true });
+
+  try {
+    // Step 1: Check if a lease already exists for this tenant
+    const [existingLease] = await db.execute(
+      `SELECT * FROM leases WHERE tenant_id = ?`,
+      [tenant_id]
+    );
+
+    if (existingLease.length > 0) {
+      // Step 2: If lease exists, update it
+      await db.execute(
+        `UPDATE leases 
+         SET property_id = ?, start_date = ?, end_date = ?, rent_amount = ?, updated_at = NOW()
+         WHERE tenant_id = ?`,
+        [property_id, lease_start, lease_end, rent_amount, tenant_id]
+      );
+    } else {
+      // Step 3: If no lease exists, insert new
+      await db.execute(
+        `INSERT INTO leases (tenant_id, property_id, start_date, end_date, rent_amount, due_date, late_fee, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, 0, NOW(), NOW())`,
+        [tenant_id, property_id, lease_start, lease_end, rent_amount]
+      );
+    }
+
+    // Step 4: Update user status to active
+    await db.execute(`UPDATE users SET is_active = true WHERE user_id = ?`, [tenant_id]);
+
+    res.status(201).json({ success: true });
+  } catch (error) {
+    console.error("Error adding/updating tenant lease:", error);
+    res.status(500).json({ success: false, message: "Internal server error" });
+  }
 });
+
 
 // ✅ Toggle Tenant Active Status
 router.put("/tenant/:id/status", async (req, res) => {
