@@ -157,7 +157,7 @@ router.get("/tenant/:id", async (req, res) => {
 // GET /tenant/available-tenants
 router.get("/available-tenants", authenticateInvestor, async (req, res) => {
   try {
-    const tenants = await db.query(`
+    const tenants = await db.execute(`
       SELECT * FROM users
       WHERE role = 'tenant'
       AND user_id NOT IN (
