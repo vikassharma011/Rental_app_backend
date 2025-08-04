@@ -155,7 +155,7 @@ router.get("/tenant/:id", async (req, res) => {
 });
 
 // GET /tenant/available-tenants
-router.get("/available-tenants", authenticateToken, async (req, res) => {
+router.get("/available-tenants", authenticateInvestor, async (req, res) => {
   try {
     const tenants = await db.query(`
       SELECT * FROM users
