@@ -1,3 +1,9 @@
+
+import express from "express";
+import { db } from "../../db.js";
+const router = express.Router();
+
+
 // Delete a maintenance request
 router.delete("/requests/:id", async (req, res) => {
   try {
@@ -13,9 +19,6 @@ router.delete("/requests/:id", async (req, res) => {
   }
 });
 
-import express from "express";
-import { db } from "../../db.js";
-const router = express.Router();
 
 // --- Supplier Quotes ---
 // Get all quotes for a maintenance request
