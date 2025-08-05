@@ -65,7 +65,8 @@ router.put("/requests/:id/quotes/:quoteId/accept", async (req, res) => {
 router.get("/requests", async (req, res) => {
   try {
     const [rows] = await db.execute(`
-      SELECT mr.*, p.title AS property_title, p.image_url AS property_image, u.first_name AS supplier_name
+      SELECT mr.*, p.title AS property_title, p.image_url AS property_image,
+        CONCAT_WS(' ', u.first_name, u.last_name) AS supplier_name
       FROM maintenance_requests mr
       LEFT JOIN property p ON mr.property_id = p.property_id
       LEFT JOIN users u ON mr.supplier_id = u.user_id
