@@ -8,6 +8,9 @@ import { googleAuthRoutes } from "./Routes/auth/google.js";
 import {auth} from "./Routes/auth/Auth.js";
 import  "./Routes/auth/passport.js"; // ✅ Passport import karo
 import { PropertyRouter } from "./Routes/Investor/Property.js";
+import { MaintenanceRouter } from "./Routes/Investor/Maintenance.js";
+import { SupplierRouter } from "./Routes/Investor/Supplier.js";
+import { InventoryRouter } from "./Routes/Investor/Inventory.js";
 import session from "express-session";
 import { db } from "./db.js";
 import dotenv from "dotenv";
@@ -40,6 +43,9 @@ app.use(passport.session());
 app.use("/auth", auth);
 app.use("/auth", googleAuthRoutes);
 app.use("/investor", PropertyRouter);
+app.use("/investor", MaintenanceRouter);
+app.use("/investor", SupplierRouter);
+app.use("/investor", InventoryRouter);
 app.use("/tenant" , TenantRouter) ; 
 
 app.get("/", (req, res) => {
