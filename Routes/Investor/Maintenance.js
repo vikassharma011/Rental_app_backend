@@ -2,6 +2,65 @@ import express from "express";
 import { db } from "../../db.js";
 const router = express.Router();
 
+// --- Supplier Quotes ---
+// Get all quotes for a maintenance request
+router.get("/requests/:id/quotes", async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT q.*, u.first_name, u.last_name, u.name FROM maintenance_quotes q
+        LEFT JOIN users u ON q.supplier_id = u.user_id
+        WHERE q.request_id = ?`,
+      [req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Supplier submits a quote for a maintenance request
+router.post("/requests/:id/quotes", async (req, res) => {
+  try {
+    const { supplier_id, amount } = req.body;
+    if (!supplier_id || !amount) return res.status(400).json({ error: "Missing supplier_id or amount" });
+    await db.execute(
+      `INSERT INTO maintenance_quotes (request_id, supplier_id, amount, status, created_at) VALUES (?, ?, ?, 'pending', NOW())`,
+      [req.params.id, supplier_id, amount]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Investor accepts a supplier's quote for a maintenance request
+router.put("/requests/:id/quotes/:quoteId/accept", async (req, res) => {
+  try {
+    // Mark all quotes as rejected except the accepted one
+    await db.execute(
+      `UPDATE maintenance_quotes SET status = 'rejected' WHERE request_id = ? AND quote_id != ?`,
+      [req.params.id, req.params.quoteId]
+    );
+    // Mark the accepted quote
+    await db.execute(
+      `UPDATE maintenance_quotes SET status = 'accepted' WHERE quote_id = ?`,
+      [req.params.quoteId]
+    );
+    // Update the maintenance request with the accepted supplier and quote
+    const [[accepted]] = await db.execute(
+      `SELECT supplier_id, amount FROM maintenance_quotes WHERE quote_id = ?`,
+      [req.params.quoteId]
+    );
+    await db.execute(
+      `UPDATE maintenance_requests SET supplier_id = ?, quote_amount = ?, status = 'assigned' WHERE request_id = ?`,
+      [accepted.supplier_id, accepted.amount, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Get all maintenance requests
 router.get("/requests", async (req, res) => {
   try {
