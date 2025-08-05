@@ -1,3 +1,17 @@
+// Delete a maintenance request
+router.delete("/requests/:id", async (req, res) => {
+  try {
+    // Optionally, delete related quotes first if you want to enforce referential integrity
+    await db.execute("DELETE FROM maintenance_quotes WHERE request_id = ?", [req.params.id]);
+    const [result] = await db.execute("DELETE FROM maintenance_requests WHERE request_id = ?", [req.params.id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Request not found" });
+    }
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 import express from "express";
 import { db } from "../../db.js";
