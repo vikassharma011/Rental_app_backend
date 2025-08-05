@@ -8,7 +8,7 @@ const router = express.Router();
 router.get("/requests/:id/quotes", async (req, res) => {
   try {
     const [rows] = await db.execute(
-      `SELECT q.*, u.first_name, u.last_name, u.name FROM maintenance_quotes q
+      `SELECT q.*, u.first_name, u.last_name FROM maintenance_quotes q
         LEFT JOIN users u ON q.supplier_id = u.user_id
         WHERE q.request_id = ?`,
       [req.params.id]
