@@ -1,3 +1,16 @@
+// Update priority
+router.put("/requests/:id/priority", async (req, res) => {
+  try {
+    const { priority } = req.body;
+    await db.execute(
+      "UPDATE maintenance_requests SET priority = ?, updated_at = NOW() WHERE request_id = ?",
+      [priority, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 import express from "express";
 import { db } from "../../db.js";
 const router = express.Router();
