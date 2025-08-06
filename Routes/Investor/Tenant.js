@@ -60,12 +60,40 @@ router.get("/tenant-requests", async (req, res) => {
 // ✅ Approve or Reject Tenant
 router.post("/tenant-requests/:id/:action", async (req, res) => {
   const { id, action } = req.params;
+  // Fetch tenant info
+  const [rows] = await db.execute(`SELECT email, first_name FROM users WHERE user_id = ? AND role = 'tenant'`, [id]);
+  const tenant = rows[0];
+  let emailSent = false;
   if (action === "approve") {
     await db.execute(`UPDATE users SET is_active = true, status = 'approved' WHERE user_id = ?`, [id]);
+    if (tenant?.email) {
+      try {
+        await sendEmail(
+          tenant.email,
+          "Account Approved",
+          `🎉 Hi ${tenant.first_name}, your account has been approved!\nLogin here: https://yourapp.com/tenant/login`
+        );
+        emailSent = true;
+      } catch (err) {
+        console.error("Failed to send approval email:", err.message);
+      }
+    }
   } else {
+    if (tenant?.email) {
+      try {
+        await sendEmail(
+          tenant.email,
+          "Account Rejected",
+          `❌ Sorry, your account has been rejected.`
+        );
+        emailSent = true;
+      } catch (err) {
+        console.error("Failed to send rejection email:", err.message);
+      }
+    }
     await db.execute(`DELETE FROM users WHERE user_id = ? AND role = 'tenant'`, [id]);
   }
-  res.json({ success: true, action });
+  res.json({ success: true, action, emailSent });
 });
 
 // ✅ Add Tenant to Lease

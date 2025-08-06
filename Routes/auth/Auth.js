@@ -94,9 +94,15 @@ router.post("/approve/:userId", authenticateInvestor, async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid status. Use 'approved' or 'rejected'." });
   }
 
+  // If approved, set is_active=1; if rejected, set is_active=0
   await db.execute(
-    "UPDATE users SET status = ?, rejected_reason = ? WHERE user_id = ?",
-    [status, status === "rejected" ? reason || null : null, userId]
+    "UPDATE users SET status = ?, rejected_reason = ?, is_active = ? WHERE user_id = ?",
+    [
+      status,
+      status === "rejected" ? reason || null : null,
+      status === "approved" ? 1 : 0,
+      userId
+    ]
   );
 
   const [rows] = await db.execute("SELECT email, role, first_name FROM users WHERE user_id = ?", [userId]);
