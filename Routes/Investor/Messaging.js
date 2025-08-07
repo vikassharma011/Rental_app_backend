@@ -1,3 +1,22 @@
+// Get contacts for investor messaging
+router.get('/contacts/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    // Example: fetch tenants and suppliers related to investor
+    const [tenants] = await db.execute(
+      `SELECT id, name, 'tenant' as role FROM users WHERE role = 'tenant' AND investor_id = ?`,
+      [userId]
+    );
+    const [suppliers] = await db.execute(
+      `SELECT id, name, 'supplier' as role FROM users WHERE role = 'supplier' AND investor_id = ?`,
+      [userId]
+    );
+    const contacts = [...tenants, ...suppliers];
+    res.json({ contacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 import express from "express";
 import { db } from "../../db.js";
 const router = express.Router();
