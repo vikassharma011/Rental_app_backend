@@ -16,6 +16,12 @@ import { db } from "./db.js";
 import dotenv from "dotenv";
 import { TenantRouter } from "./Routes/Investor/Tenant.js";
 
+import { PaymentsRouter } from "./Routes/Investor/Payments.js";
+
+import { MessagingRouter } from "./Routes/Investor/Messaging.js";
+
+import { DocumentsRouter } from "./Routes/Investor/Documents.js";
+
 dotenv.config();
 
 const app = express();
@@ -47,6 +53,18 @@ app.use("/investor", MaintenanceRouter);
 app.use("/investor", SupplierRouter);
 app.use("/investor", InventoryRouter);
 app.use("/tenant" , TenantRouter) ; 
+
+import { TenantPortalRouter } from "./Routes/Tenant/Portal.js";
+app.use("/tenant/portal", TenantPortalRouter);
+
+import { SupplierPortalRouter } from "./Routes/Supplier/Portal.js";
+app.use("/supplier/portal", SupplierPortalRouter);
+
+app.use("/investor/payments", PaymentsRouter);
+
+app.use("/investor/messaging", MessagingRouter);
+
+app.use("/investor/documents", DocumentsRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");
