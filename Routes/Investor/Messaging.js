@@ -1,3 +1,9 @@
+
+import express from "express";
+import { db } from "../../db.js";
+const router = express.Router();
+
+
 // Get contacts for investor messaging
 router.get('/contacts/:userId', async (req, res) => {
   try {
@@ -17,9 +23,6 @@ router.get('/contacts/:userId', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-import express from "express";
-import { db } from "../../db.js";
-const router = express.Router();
 
 // Send a message (investor, tenant, supplier)
 router.post("/send", async (req, res) => {
