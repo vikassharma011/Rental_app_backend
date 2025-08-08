@@ -1,5 +1,28 @@
+
+import express from "express";
+import { db } from "../../db.js";
+import jwt from "jsonwebtoken";
+const router = express.Router();
+
+// Simple authentication middleware for supplier
+function authenticateSupplier(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ success: false });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== "supplier") {
+      return res.status(403).json({ success: false, message: "Only suppliers allowed" });
+    }
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(401).json({ success: false, message: "Invalid token" });
+  }
+}
+
+
 // Get contacts for supplier messaging (investors and tenants linked to supplier)
-router.get('/contacts/:userId', async (req, res) => {
+router.get('/contacts/:userId', authenticateSupplier, async (req, res) => {
   try {
     const userId = req.params.userId;
     const search = req.query.search ? `%${req.query.search}%` : null;
@@ -40,9 +63,6 @@ router.get('/contacts/:userId', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-import express from "express";
-import { db } from "../../db.js";
-const router = express.Router();
 
 // Dashboard summary for supplier
 router.get("/dashboard/:id", async (req, res) => {
@@ -151,7 +171,7 @@ router.put("/settings/:id", async (req, res) => {
 });
 
 // Communication (messaging)
-router.get("/communication/inbox/:id", async (req, res) => {
+router.get("/communication/inbox/:id", authenticateSupplier, async (req, res) => {
   try {
     const supplier_id = req.params.id;
     const [messages] = await db.execute("SELECT * FROM messages WHERE receiver_id = ?", [supplier_id]);
@@ -161,7 +181,7 @@ router.get("/communication/inbox/:id", async (req, res) => {
   }
 });
 
-router.get("/communication/sent/:id", async (req, res) => {
+router.get("/communication/sent/:id", authenticateSupplier, async (req, res) => {
   try {
     const supplier_id = req.params.id;
     const [messages] = await db.execute("SELECT * FROM messages WHERE sender_id = ?", [supplier_id]);
@@ -172,7 +192,7 @@ router.get("/communication/sent/:id", async (req, res) => {
 });
 
 // Send a message (supplier, tenant, investor)
-router.post("/communication/send", async (req, res) => {
+router.post("/communication/send", authenticateSupplier, async (req, res) => {
   try {
     const { sender_id, receiver_id, role, content } = req.body;
     if (!sender_id || !receiver_id || !role || !content) return res.status(400).json({ error: "Missing required fields" });

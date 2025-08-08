@@ -1,12 +1,29 @@
 
 import express from "express";
 import { db } from "../../db.js";
+import jwt from "jsonwebtoken";
 const router = express.Router();
+
+// Simple authentication middleware for tenant
+function authenticateTenant(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ success: false });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== "tenant") {
+      return res.status(403).json({ success: false, message: "Only tenants allowed" });
+    }
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(401).json({ success: false, message: "Invalid token" });
+  }
+}
 
 
 
 // Get contacts for tenant messaging (investor and suppliers linked to tenant)
-router.get('/contacts/:userId', async (req, res) => {
+router.get('/contacts/:userId', authenticateTenant, async (req, res) => {
   try {
     const userId = req.params.userId;
     const search = req.query.search ? `%${req.query.search}%` : null;
@@ -133,7 +150,7 @@ router.get("/maintenance/:id", async (req, res) => {
 });
 
 // Messaging (inbox/sent)
-router.get("/messaging/inbox/:id", async (req, res) => {
+router.get("/messaging/inbox/:id", authenticateTenant, async (req, res) => {
   try {
     const tenant_id = req.params.id;
     const [messages] = await db.execute("SELECT * FROM messages WHERE receiver_id = ?", [tenant_id]);
@@ -143,7 +160,7 @@ router.get("/messaging/inbox/:id", async (req, res) => {
   }
 });
 
-router.get("/messaging/sent/:id", async (req, res) => {
+router.get("/messaging/sent/:id", authenticateTenant, async (req, res) => {
   try {
     const tenant_id = req.params.id;
     const [messages] = await db.execute("SELECT * FROM messages WHERE sender_id = ?", [tenant_id]);
@@ -154,7 +171,7 @@ router.get("/messaging/sent/:id", async (req, res) => {
 });
 
 // Send a message (tenant, supplier, investor)
-router.post("/messaging/send", async (req, res) => {
+router.post("/messaging/send", authenticateTenant, async (req, res) => {
   try {
     const { sender_id, receiver_id, role, content } = req.body;
     if (!sender_id || !receiver_id || !role || !content) return res.status(400).json({ error: "Missing required fields" });
