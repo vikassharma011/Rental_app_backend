@@ -18,8 +18,6 @@ import { TenantRouter } from "./Routes/Investor/Tenant.js";
 
 import { PaymentsRouter } from "./Routes/Investor/Payments.js";
 
-import { MessagingRouter } from "./Routes/Investor/Messaging.js";
-
 import { DocumentsRouter } from "./Routes/Investor/Documents.js";
 
 // Import common messaging router
@@ -92,8 +90,6 @@ import { SupplierPortalRouter } from "./Routes/Supplier/Portal.js";
 app.use("/supplier/portal", SupplierPortalRouter);
 
 app.use("/investor/payments", PaymentsRouter);
-
-app.use("/investor/messaging", MessagingRouter);
 
 app.use("/investor/documents", DocumentsRouter);
 
