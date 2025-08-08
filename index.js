@@ -24,7 +24,35 @@ import { DocumentsRouter } from "./Routes/Investor/Documents.js";
 
 dotenv.config();
 
+import http from 'http';
+import { Server as SocketIOServer } from 'socket.io';
+
 const app = express();
+const server = http.createServer(app);
+const io = new SocketIOServer(server, {
+  cors: {
+    origin: "http://localhost:3000",
+    credentials: true
+  }
+});
+
+// Socket.IO connection
+io.on('connection', (socket) => {
+  console.log('User connected:', socket.id);
+
+  socket.on('join', ({ userId }) => {
+    socket.join(`user_${userId}`);
+  });
+
+  socket.on('send_message', (data) => {
+    // Broadcast to receiver
+    io.to(`user_${data.receiver_id}`).emit('receive_message', data);
+  });
+
+  socket.on('disconnect', () => {
+    console.log('User disconnected:', socket.id);
+  });
+});
 
 app.use(cors({
   origin: "http://localhost:3000",
@@ -83,6 +111,6 @@ app.get("/", (req, res) => {
 })();
 
 const port = Number(process.env.PORT) || 5000 ;
-app.listen(port , () => {
-  console.log(`Server is running on port ${port}`);
+server.listen(port , () => {
+  console.log(`Server is running with Socket.IO on port ${port}`);
 });
