@@ -1,3 +1,45 @@
+// Get contacts for supplier messaging (investors and tenants linked to supplier)
+router.get('/contacts/:userId', async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const search = req.query.search ? `%${req.query.search}%` : null;
+
+    // Get investors for properties supplier worked on
+    let investorSQL = `
+      SELECT DISTINCT i.user_id AS id, CONCAT(i.first_name, ' ', i.last_name) AS name, 'investor' AS role
+      FROM users i
+      JOIN property p ON i.user_id = p.investor_id
+      JOIN maintenance_requests m ON p.property_id = m.property_id
+      WHERE m.supplier_id = ? AND i.is_active = 1
+    `;
+    let investorParams = [userId];
+    if (search) {
+      investorSQL += ' AND (i.first_name LIKE ? OR i.last_name LIKE ? OR i.email LIKE ?)';
+      investorParams.push(search, search, search);
+    }
+    const [investors] = await db.execute(investorSQL, investorParams);
+
+    // Get tenants for properties supplier worked on
+    let tenantSQL = `
+      SELECT DISTINCT t.user_id AS id, CONCAT(t.first_name, ' ', t.last_name) AS name, 'tenant' AS role
+      FROM users t
+      JOIN leases l ON t.user_id = l.tenant_id
+      JOIN maintenance_requests m ON l.property_id = m.property_id
+      WHERE m.supplier_id = ? AND t.is_active = 1
+    `;
+    let tenantParams = [userId];
+    if (search) {
+      tenantSQL += ' AND (t.first_name LIKE ? OR t.last_name LIKE ? OR t.email LIKE ?)';
+      tenantParams.push(search, search, search);
+    }
+    const [tenants] = await db.execute(tenantSQL, tenantParams);
+
+    const contacts = [...investors, ...tenants];
+    res.json({ contacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 import express from "express";
 import { db } from "../../db.js";
 const router = express.Router();

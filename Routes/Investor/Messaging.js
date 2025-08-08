@@ -5,18 +5,42 @@ const router = express.Router();
 
 
 // Get contacts for investor messaging
+// Get contacts for investor messaging (active tenants and suppliers, with search)
 router.get('/contacts/:userId', async (req, res) => {
   try {
     const userId = req.params.userId;
-    // Example: fetch tenants and suppliers related to investor
-    const [tenants] = await db.execute(
-      `SELECT id, name, 'tenant' as role FROM users WHERE role = 'tenant' AND investor_id = ?`,
-      [userId]
-    );
-    const [suppliers] = await db.execute(
-      `SELECT id, name, 'supplier' as role FROM users WHERE role = 'supplier' AND investor_id = ?`,
-      [userId]
-    );
+    const search = req.query.search ? `%${req.query.search}%` : null;
+
+    // Tenants linked to investor's properties
+    let tenantSQL = `
+      SELECT u.user_id AS id, CONCAT(u.first_name, ' ', u.last_name) AS name, 'tenant' AS role
+      FROM users u
+      JOIN leases l ON u.user_id = l.tenant_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE p.investor_id = ? AND u.is_active = 1
+    `;
+    let tenantParams = [userId];
+    if (search) {
+      tenantSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
+      tenantParams.push(search, search, search);
+    }
+    const [tenants] = await db.execute(tenantSQL, tenantParams);
+
+    // Suppliers linked to investor (via property or maintenance)
+    let supplierSQL = `
+      SELECT DISTINCT u.user_id AS id, CONCAT(u.first_name, ' ', u.last_name) AS name, 'supplier' AS role
+      FROM users u
+      JOIN maintenance_requests m ON u.user_id = m.supplier_id
+      JOIN property p ON m.property_id = p.property_id
+      WHERE p.investor_id = ? AND u.is_active = 1
+    `;
+    let supplierParams = [userId];
+    if (search) {
+      supplierSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
+      supplierParams.push(search, search, search);
+    }
+    const [suppliers] = await db.execute(supplierSQL, supplierParams);
+
     const contacts = [...tenants, ...suppliers];
     res.json({ contacts });
   } catch (error) {
