@@ -22,6 +22,9 @@ import { MessagingRouter } from "./Routes/Investor/Messaging.js";
 
 import { DocumentsRouter } from "./Routes/Investor/Documents.js";
 
+// Import common messaging router
+import { MessagingRouter as CommonMessagingRouter } from "./Routes/Messaging.js";
+
 dotenv.config();
 
 import http from 'http';
@@ -93,6 +96,9 @@ app.use("/investor/payments", PaymentsRouter);
 app.use("/investor/messaging", MessagingRouter);
 
 app.use("/investor/documents", DocumentsRouter);
+
+// Add common messaging routes
+app.use("/messaging", CommonMessagingRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");

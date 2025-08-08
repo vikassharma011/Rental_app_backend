@@ -41,7 +41,15 @@ router.get('/contacts/:userId', async (req, res) => {
       tenantSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
       tenantParams.push(search, search, search);
     }
-    const [tenants] = await db.execute(tenantSQL, tenantParams);
+    
+    let tenants = [];
+    try {
+      const [tenantResults] = await db.execute(tenantSQL, tenantParams);
+      tenants = tenantResults;
+    } catch (error) {
+      console.log('No tenants found or error:', error.message);
+      tenants = [];
+    }
 
     // Suppliers linked to investor (via property or maintenance)
     let supplierSQL = `
@@ -75,7 +83,15 @@ router.get('/contacts/:userId', async (req, res) => {
       supplierSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
       supplierParams.push(search, search, search);
     }
-    const [suppliers] = await db.execute(supplierSQL, supplierParams);
+    
+    let suppliers = [];
+    try {
+      const [supplierResults] = await db.execute(supplierSQL, supplierParams);
+      suppliers = supplierResults;
+    } catch (error) {
+      console.log('No suppliers found or error:', error.message);
+      suppliers = [];
+    }
 
     const contacts = [...tenants, ...suppliers];
     
@@ -87,7 +103,16 @@ router.get('/contacts/:userId', async (req, res) => {
       return new Date(b.last_message_time) - new Date(a.last_message_time);
     });
 
-    res.json({ contacts });
+    // Transform contacts to include property field for frontend compatibility
+    const transformedContacts = contacts.map(contact => ({
+      ...contact,
+      property: contact.property_name || 'Unknown Property',
+      unreadCount: contact.unread_count || 0,
+      lastMessage: contact.last_message || 'No messages yet',
+      lastMessageTime: contact.last_message_time ? new Date(contact.last_message_time).toLocaleString() : 'Never'
+    }));
+
+    res.json({ contacts: transformedContacts });
   } catch (error) {
     console.error('Error fetching contacts:', error);
     res.status(500).json({ error: error.message });
@@ -97,33 +122,34 @@ router.get('/contacts/:userId', async (req, res) => {
 // Send a message (investor, tenant, supplier)
 router.post("/send", async (req, res) => {
   try {
-    const { sender_id, receiver_id, role, content, message_type = 'text' } = req.body;
+    const { sender_id, receiver_id, role, content, message, message_type = 'text' } = req.body;
     
-    if (!sender_id || !receiver_id || !role || !content) {
-      return res.status(400).json({ error: "Missing required fields" });
+    // Handle both 'content' and 'message' field names for compatibility
+    const messageContent = content || message;
+    
+    if (!sender_id || !receiver_id || !messageContent) {
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
     const [result] = await db.execute(
-      `INSERT INTO messages (sender_id, receiver_id, role, content, message_type, created_at) 
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [sender_id, receiver_id, role, content, message_type]
+      'INSERT INTO messages (sender_id, receiver_id, content, message_type, created_at) VALUES (?, ?, ?, ?, NOW())',
+      [sender_id, receiver_id, messageContent, message_type]
     );
 
-    // Get the created message with full details
-    const [messageResult] = await db.execute(
-      `SELECT m.*, 
-              CONCAT(s.first_name, ' ', s.last_name) as sender_name,
-              CONCAT(r.first_name, ' ', r.last_name) as receiver_name
-       FROM messages m
-       JOIN users s ON m.sender_id = s.user_id
-       JOIN users r ON m.receiver_id = r.user_id
-       WHERE m.message_id = ?`,
-      [result.insertId]
-    );
+    const messageData = {
+      id: result.insertId,
+      sender_id,
+      receiver_id,
+      content: messageContent,
+      message: messageContent, // Include both for compatibility
+      message_type,
+      created_at: new Date().toISOString(),
+      is_read: false
+    };
 
     res.status(201).json({ 
-      message: "Message sent", 
-      messageData: messageResult[0] 
+      message: messageData,
+      success: true 
     });
   } catch (error) {
     console.error('Error sending message:', error);
@@ -138,7 +164,8 @@ router.get("/inbox/:id", async (req, res) => {
     const contact_id = req.query.contact_id;
 
     if (!contact_id) {
-      return res.status(400).json({ error: "Missing contact_id query parameter" });
+      // If no contact_id provided, return empty messages array
+      return res.json({ messages: [] });
     }
 
     const [messages] = await db.execute(
@@ -161,7 +188,14 @@ router.get("/inbox/:id", async (req, res) => {
       [contact_id, user_id]
     );
 
-    res.json({ messages });
+    // Transform messages to include both 'content' and 'message' fields for compatibility
+    const transformedMessages = messages.map(msg => ({
+      ...msg,
+      message: msg.content, // Add 'message' field for frontend compatibility
+      id: msg.message_id || msg.id // Handle different ID field names
+    }));
+
+    res.json({ messages: transformedMessages });
   } catch (error) {
     console.error('Error fetching messages:', error);
     res.status(500).json({ error: error.message });
