@@ -341,7 +341,7 @@ router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
 // Get rent payment history for tenant
 router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, res) => {
   try {
-    const tenant_id = req.params.tenant_id;
+    const tenant_id = parseInt(req.params.tenant_id);
     
     // Ensure tenant_id is valid
     if (!tenant_id || isNaN(tenant_id)) {
@@ -369,14 +369,14 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
       WHERE p.tenant_id = ? AND p.payment_type = 'rent'
       ORDER BY p.payment_date DESC 
       LIMIT ? OFFSET ?
-    `, [parseInt(tenant_id), limit, offset]);
+    `, [tenant_id, limit, offset]);
 
     console.log('Found payments:', payments.length);
 
     const [[totalCount]] = await db.execute(`
       SELECT COUNT(*) as count FROM payments 
       WHERE tenant_id = ? AND payment_type = 'rent'
-    `, [parseInt(tenant_id)]);
+    `, [tenant_id]);
 
     console.log('Total count:', totalCount.count);
 
