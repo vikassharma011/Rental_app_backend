@@ -341,7 +341,7 @@ router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
 // Get rent payment history for tenant
 router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, res) => {
   try {
-    const tenant_id = parseInt(req.params.tenant_id);
+    const tenant_id = req.params.tenant_id;
     
     // Ensure tenant_id is valid
     if (!tenant_id || isNaN(tenant_id)) {
@@ -357,8 +357,8 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     console.log('Page:', page, 'Limit:', limit, 'Offset:', offset);
     console.log('Parameter types - tenant_id:', typeof tenant_id, 'limit:', typeof limit, 'offset:', typeof offset);
 
-    // Use a simpler query first to test
-    const [payments] = await db.execute(`
+    // Use query() instead of execute() to avoid parameter binding issues
+    const [payments] = await db.query(`
       SELECT 
         payment_id,
         lease_id,
@@ -381,8 +381,8 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
 
     console.log('Found payments:', payments.length);
 
-    // Get total count
-    const [[totalCount]] = await db.execute(`
+    // Get total count using query() as well
+    const [[totalCount]] = await db.query(`
       SELECT COUNT(*) as count FROM payments 
       WHERE tenant_id = ? AND payment_type = 'rent'
     `, [tenant_id]);
