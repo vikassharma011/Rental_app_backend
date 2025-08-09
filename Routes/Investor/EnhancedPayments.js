@@ -342,13 +342,22 @@ router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
 router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, res) => {
   try {
     const tenant_id = req.params.tenant_id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
+    
+    // Ensure tenant_id is valid
+    if (!tenant_id || isNaN(tenant_id)) {
+      return res.status(400).json({ error: "Invalid tenant ID" });
+    }
+    
+    // Parse and validate pagination parameters
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = Math.max(1, Math.min(100, parseInt(req.query.limit) || 10));
     const offset = (page - 1) * limit;
 
     console.log('Fetching payment history for tenant:', tenant_id);
     console.log('Page:', page, 'Limit:', limit, 'Offset:', offset);
+    console.log('Parameter types - tenant_id:', typeof tenant_id, 'limit:', typeof limit, 'offset:', typeof offset);
 
+    // First, let's try a simple query without pagination to test
     const [payments] = await db.execute(`
       SELECT 
         p.*,
@@ -360,14 +369,14 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
       WHERE p.tenant_id = ? AND p.payment_type = 'rent'
       ORDER BY p.payment_date DESC 
       LIMIT ? OFFSET ?
-    `, [tenant_id, limit, offset]);
+    `, [parseInt(tenant_id), limit, offset]);
 
     console.log('Found payments:', payments.length);
 
     const [[totalCount]] = await db.execute(`
       SELECT COUNT(*) as count FROM payments 
       WHERE tenant_id = ? AND payment_type = 'rent'
-    `, [tenant_id]);
+    `, [parseInt(tenant_id)]);
 
     console.log('Total count:', totalCount.count);
 
@@ -382,6 +391,12 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     });
   } catch (error) {
     console.error("Error getting payment history:", error);
+    console.error("Error details:", {
+      code: error.code,
+      errno: error.errno,
+      sqlState: error.sqlState,
+      sqlMessage: error.sqlMessage
+    });
     res.status(500).json({ error: error.message });
   }
 });
