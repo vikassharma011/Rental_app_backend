@@ -17,6 +17,7 @@ import dotenv from "dotenv";
 import { TenantRouter } from "./Routes/Investor/Tenant.js";
 
 import { PaymentsRouter } from "./Routes/Investor/Payments.js";
+import { EnhancedPaymentsRouter } from "./Routes/Investor/EnhancedPayments.js";
 
 import { DocumentsRouter } from "./Routes/Investor/Documents.js";
 
@@ -90,6 +91,7 @@ import { SupplierPortalRouter } from "./Routes/Supplier/Portal.js";
 app.use("/supplier/portal", SupplierPortalRouter);
 
 app.use("/investor/payments", PaymentsRouter);
+app.use("/api/payments", EnhancedPaymentsRouter);
 
 app.use("/investor/documents", DocumentsRouter);
 

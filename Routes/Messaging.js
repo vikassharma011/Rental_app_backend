@@ -10,6 +10,54 @@ router.get('/test', (req, res) => {
   });
 });
 
+// Debug endpoint to check database relationships
+router.get('/debug/:userId/:role', async (req, res) => {
+  try {
+    const { userId, role } = req.params;
+    console.log('Debug request for user:', userId, 'role:', role);
+    
+    let result = {};
+    
+    if (role === 'investor') {
+      // Check if investor has properties
+      const [properties] = await db.execute(
+        'SELECT property_id, title FROM property WHERE investor_id = ?',
+        [userId]
+      );
+      result.properties = properties;
+      
+      // Check if properties have tenants
+      if (properties.length > 0) {
+        const propertyIds = properties.map(p => p.property_id);
+        const [tenants] = await db.execute(
+          'SELECT l.tenant_id, u.first_name, u.last_name FROM leases l JOIN users u ON l.tenant_id = u.user_id WHERE l.property_id IN (?)',
+          [propertyIds]
+        );
+        result.tenants = tenants;
+      }
+    } else if (role === 'tenant') {
+      // Check if tenant has leases
+      const [leases] = await db.execute(
+        'SELECT l.property_id, p.title, p.investor_id FROM leases l JOIN property p ON l.property_id = p.property_id WHERE l.tenant_id = ?',
+        [userId]
+      );
+      result.leases = leases;
+      
+      // Check if tenant has maintenance requests with suppliers
+      const [maintenance] = await db.execute(
+        'SELECT mr.supplier_id, u.first_name, u.last_name FROM maintenance_requests mr JOIN users u ON mr.supplier_id = u.user_id WHERE mr.tenant_id = ?',
+        [userId]
+      );
+      result.maintenance = maintenance;
+    }
+    
+    res.json(result);
+  } catch (error) {
+    console.error('Debug error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get contacts for any user type (investor, tenant, supplier)
 router.get('/contacts/:userId', async (req, res) => {
   try {
@@ -17,7 +65,10 @@ router.get('/contacts/:userId', async (req, res) => {
     const userRole = req.query.role; // investor, tenant, supplier
     const search = req.query.search ? `%${req.query.search}%` : null;
 
-    console.log('Fetching contacts for user:', userId, 'Role:', userRole);
+    console.log('=== CONTACTS REQUEST ===');
+    console.log('User ID:', userId);
+    console.log('User Role:', userRole);
+    console.log('Search Query:', search);
 
     if (!userRole) {
       return res.status(400).json({ error: 'Role parameter is required' });
@@ -26,19 +77,20 @@ router.get('/contacts/:userId', async (req, res) => {
     let contacts = [];
 
     if (userRole === 'investor') {
-      // For investors: get tenants and suppliers
+      console.log('Fetching investor contacts...');
       contacts = await getInvestorContacts(userId, search);
     } else if (userRole === 'tenant') {
-      // For tenants: get investor and suppliers
+      console.log('Fetching tenant contacts...');
       contacts = await getTenantContacts(userId, search);
     } else if (userRole === 'supplier') {
-      // For suppliers: get investors and tenants
+      console.log('Fetching supplier contacts...');
       contacts = await getSupplierContacts(userId, search);
     } else {
       return res.status(400).json({ error: 'Invalid role. Must be investor, tenant, or supplier' });
     }
 
-    console.log('Found contacts:', contacts.length);
+    console.log('Raw contacts found:', contacts.length);
+    console.log('Sample contact:', contacts[0]);
 
     // Sort by last message time (most recent first)
     contacts.sort((a, b) => {
@@ -57,7 +109,9 @@ router.get('/contacts/:userId', async (req, res) => {
       lastMessageTime: contact.last_message_time ? new Date(contact.last_message_time).toLocaleString() : 'Never'
     }));
 
-    console.log('Sending response with', transformedContacts.length, 'contacts');
+    console.log('Transformed contacts:', transformedContacts.length);
+    console.log('=== END CONTACTS REQUEST ===');
+    
     res.json({ contacts: transformedContacts });
   } catch (error) {
     console.error('Error fetching contacts:', error);
@@ -68,34 +122,26 @@ router.get('/contacts/:userId', async (req, res) => {
 // Get contacts for investor
 async function getInvestorContacts(investorId, search) {
   const contacts = [];
+  console.log('Getting contacts for investor ID:', investorId);
 
-  // Get tenants
+  // Get tenants - Simplified query
   let tenantSQL = `
-    SELECT 
+    SELECT DISTINCT
       u.user_id AS id, 
       CONCAT(u.first_name, ' ', u.last_name) AS name, 
       'tenant' AS role,
       u.email,
       p.property_id,
       p.title AS property_name,
-      (SELECT COUNT(*) FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) AND 
-        m.is_read = 0 AND m.sender_id != ?) AS unread_count,
-      (SELECT m.content FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-      (SELECT m.created_at FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
+      0 AS unread_count,
+      'No messages yet' AS last_message,
+      NULL AS last_message_time
     FROM users u
     JOIN leases l ON u.user_id = l.tenant_id
     JOIN property p ON l.property_id = p.property_id
     WHERE p.investor_id = ? AND u.is_active = 1 AND u.role = 'tenant'
   `;
-  let tenantParams = [investorId, investorId, investorId, investorId, investorId, investorId, investorId, investorId];
+  let tenantParams = [investorId];
   
   if (search) {
     tenantSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
@@ -103,13 +149,15 @@ async function getInvestorContacts(investorId, search) {
   }
 
   try {
+    console.log('Executing tenant query with params:', tenantParams);
     const [tenants] = await db.execute(tenantSQL, tenantParams);
+    console.log('Found tenants:', tenants.length);
     contacts.push(...tenants);
   } catch (error) {
-    console.log('No tenants found:', error.message);
+    console.error('Error fetching tenants:', error.message);
   }
 
-  // Get suppliers
+  // Get suppliers - Simplified query
   let supplierSQL = `
     SELECT DISTINCT
       u.user_id AS id, 
@@ -118,24 +166,15 @@ async function getInvestorContacts(investorId, search) {
       u.email,
       p.property_id,
       p.title AS property_name,
-      (SELECT COUNT(*) FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) AND 
-        m.is_read = 0 AND m.sender_id != ?) AS unread_count,
-      (SELECT m.content FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-      (SELECT m.created_at FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
+      0 AS unread_count,
+      'No messages yet' AS last_message,
+      NULL AS last_message_time
     FROM users u
     JOIN maintenance_requests m ON u.user_id = m.supplier_id
     JOIN property p ON m.property_id = p.property_id
     WHERE p.investor_id = ? AND u.is_active = 1 AND u.role = 'supplier'
   `;
-  let supplierParams = [investorId, investorId, investorId, investorId, investorId, investorId, investorId, investorId];
+  let supplierParams = [investorId];
   
   if (search) {
     supplierSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
@@ -143,46 +182,41 @@ async function getInvestorContacts(investorId, search) {
   }
 
   try {
+    console.log('Executing supplier query with params:', supplierParams);
     const [suppliers] = await db.execute(supplierSQL, supplierParams);
+    console.log('Found suppliers:', suppliers.length);
     contacts.push(...suppliers);
   } catch (error) {
-    console.log('No suppliers found:', error.message);
+    console.error('Error fetching suppliers:', error.message);
   }
 
+  console.log('Total contacts for investor:', contacts.length);
   return contacts;
 }
 
 // Get contacts for tenant
 async function getTenantContacts(tenantId, search) {
   const contacts = [];
+  console.log('Getting contacts for tenant ID:', tenantId);
 
-  // Get investor
+  // Get investor - Simplified query
   let investorSQL = `
-    SELECT 
+    SELECT DISTINCT
       u.user_id AS id, 
       CONCAT(u.first_name, ' ', u.last_name) AS name, 
       'investor' AS role,
       u.email,
       p.property_id,
       p.title AS property_name,
-      (SELECT COUNT(*) FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) AND 
-        m.is_read = 0 AND m.sender_id != ?) AS unread_count,
-      (SELECT m.content FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-      (SELECT m.created_at FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
+      0 AS unread_count,
+      'No messages yet' AS last_message,
+      NULL AS last_message_time
     FROM users u
     JOIN property p ON u.user_id = p.investor_id
     JOIN leases l ON p.property_id = l.property_id
     WHERE l.tenant_id = ? AND u.is_active = 1 AND u.role = 'investor'
   `;
-  let investorParams = [tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId];
+  let investorParams = [tenantId];
   
   if (search) {
     investorSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
@@ -190,13 +224,15 @@ async function getTenantContacts(tenantId, search) {
   }
 
   try {
+    console.log('Executing investor query with params:', investorParams);
     const [investors] = await db.execute(investorSQL, investorParams);
+    console.log('Found investors:', investors.length);
     contacts.push(...investors);
   } catch (error) {
-    console.log('No investors found:', error.message);
+    console.error('Error fetching investors:', error.message);
   }
 
-  // Get suppliers
+  // Get suppliers - Simplified query
   let supplierSQL = `
     SELECT DISTINCT
       u.user_id AS id, 
@@ -205,25 +241,16 @@ async function getTenantContacts(tenantId, search) {
       u.email,
       p.property_id,
       p.title AS property_name,
-      (SELECT COUNT(*) FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) AND 
-        m.is_read = 0 AND m.sender_id != ?) AS unread_count,
-      (SELECT m.content FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-      (SELECT m.created_at FROM messages m WHERE 
-        ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
-         (m.sender_id = ? AND m.receiver_id = u.user_id)) 
-        ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
+      0 AS unread_count,
+      'No messages yet' AS last_message,
+      NULL AS last_message_time
     FROM users u
     JOIN maintenance_requests m ON u.user_id = m.supplier_id
     JOIN property p ON m.property_id = p.property_id
     JOIN leases l ON p.property_id = l.property_id
     WHERE l.tenant_id = ? AND u.is_active = 1 AND u.role = 'supplier'
   `;
-  let supplierParams = [tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId, tenantId];
+  let supplierParams = [tenantId];
   
   if (search) {
     supplierSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
@@ -231,12 +258,15 @@ async function getTenantContacts(tenantId, search) {
   }
 
   try {
+    console.log('Executing supplier query with params:', supplierParams);
     const [suppliers] = await db.execute(supplierSQL, supplierParams);
+    console.log('Found suppliers:', suppliers.length);
     contacts.push(...suppliers);
   } catch (error) {
-    console.log('No suppliers found:', error.message);
+    console.error('Error fetching suppliers:', error.message);
   }
 
+  console.log('Total contacts for tenant:', contacts.length);
   return contacts;
 }
 
