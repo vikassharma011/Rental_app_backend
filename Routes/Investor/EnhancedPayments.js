@@ -357,22 +357,31 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     console.log('Page:', page, 'Limit:', limit, 'Offset:', offset);
     console.log('Parameter types - tenant_id:', typeof tenant_id, 'limit:', typeof limit, 'offset:', typeof offset);
 
-    // First, let's try a simple query without pagination to test
+    // Use a simpler query first to test
     const [payments] = await db.execute(`
       SELECT 
-        p.*,
-        l.rent_amount,
-        l.start_date as lease_start,
-        l.end_date as lease_end
-      FROM payments p 
-      LEFT JOIN leases l ON p.lease_id = l.lease_id
-      WHERE p.tenant_id = ? AND p.payment_type = 'rent'
-      ORDER BY p.payment_date DESC 
+        payment_id,
+        lease_id,
+        tenant_id,
+        amount,
+        late_fee_amount,
+        total_amount,
+        payment_date,
+        due_date,
+        payment_type,
+        payment_method,
+        transaction_id,
+        status,
+        created_at
+      FROM payments 
+      WHERE tenant_id = ? AND payment_type = 'rent'
+      ORDER BY payment_date DESC 
       LIMIT ? OFFSET ?
     `, [tenant_id, limit, offset]);
 
     console.log('Found payments:', payments.length);
 
+    // Get total count
     const [[totalCount]] = await db.execute(`
       SELECT COUNT(*) as count FROM payments 
       WHERE tenant_id = ? AND payment_type = 'rent'
