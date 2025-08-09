@@ -342,7 +342,8 @@ router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
 router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, res) => {
   try {
     const tenant_id = req.params.tenant_id;
-    const { page = 1, limit = 10 } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
 
     console.log('Fetching payment history for tenant:', tenant_id);
@@ -359,7 +360,7 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
       WHERE p.tenant_id = ? AND p.payment_type = 'rent'
       ORDER BY p.payment_date DESC 
       LIMIT ? OFFSET ?
-    `, [tenant_id, parseInt(limit), offset]);
+    `, [tenant_id, limit, offset]);
 
     console.log('Found payments:', payments.length);
 
@@ -373,7 +374,7 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     res.json({
       payments,
       pagination: {
-        current_page: parseInt(page),
+        current_page: page,
         total_pages: Math.ceil(totalCount.count / limit),
         total_records: totalCount.count,
         has_next: offset + payments.length < totalCount.count
