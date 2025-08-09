@@ -404,4 +404,93 @@ router.get("/messaging/unread/:userId", async (req, res) => {
   }
 });
 
+// Get supplier earnings data
+router.get("/earnings/:id", authenticateSupplier, async (req, res) => {
+  try {
+    const supplier_id = req.params.id;
+    
+    // Get completed payments
+    const [payments] = await db.execute(`
+      SELECT 
+        p.*,
+        mr.issue_description,
+        pr.title as property_title
+      FROM payments p
+      LEFT JOIN maintenance_requests mr ON p.request_id = mr.request_id
+      LEFT JOIN property pr ON mr.property_id = pr.property_id
+      WHERE p.supplier_id = ? AND p.status = 'completed'
+      ORDER BY p.payment_date DESC
+    `, [supplier_id]);
+    
+    // Get pending payments
+    const [pending] = await db.execute(`
+      SELECT 
+        mq.*,
+        mr.issue_description,
+        pr.title as property_title
+      FROM maintenance_quotes mq
+      LEFT JOIN maintenance_requests mr ON mq.request_id = mr.request_id
+      LEFT JOIN property pr ON mr.property_id = pr.property_id
+      WHERE mq.supplier_id = ? AND mq.status = 'accepted' AND mq.payment_status = 'pending'
+      ORDER BY mq.created_at DESC
+    `, [supplier_id]);
+    
+    // Calculate totals
+    const totalEarnings = payments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const pendingAmount = pending.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    
+    res.json({ 
+      payments,
+      pending,
+      totalEarnings,
+      pendingAmount
+    });
+  } catch (error) {
+    console.error('Error fetching supplier earnings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update supplier quote status
+router.put("/quote/:id/status", authenticateSupplier, async (req, res) => {
+  try {
+    const { status } = req.body;
+    
+    await db.execute(`
+      UPDATE maintenance_quotes 
+      SET status = ?, updated_at = NOW()
+      WHERE quote_id = ? AND supplier_id = ?
+    `, [status, req.params.id, req.user.userId]);
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating quote status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Submit quote for maintenance request
+router.post("/quote", authenticateSupplier, async (req, res) => {
+  try {
+    const { request_id, amount, description } = req.body;
+    
+    if (!request_id || !amount) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+    
+    const [result] = await db.execute(`
+      INSERT INTO maintenance_quotes (request_id, supplier_id, amount, description, status, created_at)
+      VALUES (?, ?, ?, ?, 'pending', NOW())
+    `, [request_id, req.user.userId, amount, description || '']);
+    
+    res.status(201).json({ 
+      message: "Quote submitted successfully",
+      quote_id: result.insertId
+    });
+  } catch (error) {
+    console.error('Error submitting quote:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export { router as SupplierPortalRouter };
