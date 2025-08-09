@@ -305,6 +305,39 @@ router.post("/tenant/create-payment-intent", authenticateUser, async (req, res) 
   }
 });
 
+// Test endpoint to check all payments (for debugging)
+router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
+  try {
+    const tenant_id = req.params.tenant_id;
+    
+    console.log('Debug: Checking all payments for tenant:', tenant_id);
+    
+    // Check all payments for this tenant
+    const [allPayments] = await db.execute(`
+      SELECT * FROM payments WHERE tenant_id = ?
+    `, [tenant_id]);
+    
+    console.log('Debug: Found payments:', allPayments);
+    
+    // Check payments table structure
+    const [tableInfo] = await db.execute(`
+      DESCRIBE payments
+    `);
+    
+    console.log('Debug: Payments table structure:', tableInfo);
+    
+    res.json({
+      tenant_id,
+      all_payments: allPayments,
+      table_structure: tableInfo,
+      total_payments: allPayments.length
+    });
+  } catch (error) {
+    console.error("Debug error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get rent payment history for tenant
 router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, res) => {
   try {
@@ -312,21 +345,28 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     const { page = 1, limit = 10 } = req.query;
     const offset = (page - 1) * limit;
 
+    console.log('Fetching payment history for tenant:', tenant_id);
+    console.log('Page:', page, 'Limit:', limit, 'Offset:', offset);
+
     const [payments] = await db.execute(`
       SELECT p.*, rs.month_year, l.rent_amount, prop.title as property_title
       FROM payments p 
       LEFT JOIN rent_schedules rs ON p.payment_id = rs.payment_id
       LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN property prop ON l.property_id = prop.property_id
+      LEFT JOIN property prop ON l.property_id = p.property_id
       WHERE p.tenant_id = ? AND p.payment_type = 'rent'
       ORDER BY p.payment_date DESC 
       LIMIT ? OFFSET ?
     `, [tenant_id, parseInt(limit), offset]);
 
+    console.log('Found payments:', payments.length);
+
     const [[totalCount]] = await db.execute(`
       SELECT COUNT(*) as count FROM payments 
       WHERE tenant_id = ? AND payment_type = 'rent'
     `, [tenant_id]);
+
+    console.log('Total count:', totalCount.count);
 
     res.json({
       payments,
