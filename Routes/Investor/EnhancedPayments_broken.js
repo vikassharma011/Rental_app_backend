@@ -25,29 +25,11 @@ router.get("/tenant/rent-status/:tenant_id", async (req, res) => {
 
     // Get current month's rent schedule
     const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
-    let [[rentSchedule]] = await db.execute(`
+    const [[rentSchedule]] = await db.execute(`
       SELECT * FROM rent_schedules 
       WHERE lease_id = ? AND month_year = ? AND status = 'pending'
       ORDER BY due_date ASC LIMIT 1
     `, [lease.lease_id, currentMonth]);
-
-    // If no current month schedule, create one
-    if (!rentSchedule) {
-      const currentDate = new Date();
-      const dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), lease.due_date);
-      
-      await db.execute(`
-        INSERT INTO rent_schedules (lease_id, month_year, due_date, amount, status, created_at, updated_at)
-        VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())
-      `, [lease.lease_id, currentMonth, dueDate.toISOString().slice(0, 10), lease.rent_amount]);
-
-      // Fetch the newly created schedule
-      [[rentSchedule]] = await db.execute(`
-        SELECT * FROM rent_schedules 
-        WHERE lease_id = ? AND month_year = ? AND status = 'pending'
-        ORDER BY due_date ASC LIMIT 1
-      `, [lease.lease_id, currentMonth]);
-    }
 
     // Calculate late fees if overdue
     let lateFeeAmount = 0;
@@ -300,6 +282,7 @@ router.get("/investor/tenants-rent-status", async (req, res) => {
       JOIN property p ON l.property_id = p.property_id
       LEFT JOIN rent_schedules rs ON l.lease_id = rs.lease_id 
         AND rs.month_year = DATE_FORMAT(CURDATE(), '%Y-%m')
+        AND rs.status = 'pending'
       WHERE u.role = 'tenant' AND u.status = 'approved' AND u.is_active = 1
       ${investor_id ? 'AND p.investor_id = ?' : ''}
       ORDER BY rs.due_date ASC, u.first_name ASC
@@ -672,8 +655,8 @@ router.get("/investor/payment-summary", async (req, res) => {
         SUM(p.late_fee_amount) as total_late_fees,
         AVG(CASE WHEN p.payment_type = 'rent' THEN p.total_amount ELSE NULL END) as avg_rent_amount
       FROM payments p
-      LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN property prop ON l.property_id = prop.property_id
+      JOIN leases l ON p.lease_id = l.lease_id
+      JOIN property prop ON l.property_id = prop.property_id
       WHERE p.status = 'completed' ${dateFilter}
       ${investor_id ? 'AND prop.investor_id = ?' : ''}
     `, start_date && end_date ? [start_date, end_date, ...(investor_id ? [investor_id] : [])] : (investor_id ? [investor_id] : []));
