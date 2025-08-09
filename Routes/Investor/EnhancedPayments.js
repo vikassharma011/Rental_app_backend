@@ -61,6 +61,45 @@ const authenticateUser = (req, res, next) => {
   }
 };
 
+// Create rent schedules for a lease
+const createRentSchedules = async (leaseId, startDate, endDate, rentAmount, dueDay) => {
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    
+    // Create schedules for each month
+    let currentDate = new Date(start.getFullYear(), start.getMonth(), 1);
+    
+    while (currentDate <= end) {
+      const monthYear = currentDate.toISOString().slice(0, 7);
+      const dueDate = new Date(currentDate.getFullYear(), currentDate.getMonth(), dueDay);
+      
+      // Check if schedule already exists
+      const [[existingSchedule]] = await db.execute(`
+        SELECT schedule_id FROM rent_schedules 
+        WHERE lease_id = ? AND month_year = ?
+      `, [leaseId, monthYear]);
+      
+      if (!existingSchedule) {
+        await db.execute(`
+          INSERT INTO rent_schedules (lease_id, month_year, due_date, amount, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())
+        `, [leaseId, monthYear, dueDate.toISOString().slice(0, 10), rentAmount]);
+        
+        console.log(`Created rent schedule for ${monthYear}`);
+      }
+      
+      // Move to next month
+      currentDate.setMonth(currentDate.getMonth() + 1);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error creating rent schedules:', error);
+    return false;
+  }
+};
+
 // ==================== RENT PAYMENT SYSTEM ====================
 
 // Get tenant's current rent status and due amounts
@@ -81,11 +120,11 @@ router.get("/tenant/rent-status/:tenant_id", authenticateUser, async (req, res) 
       return res.status(404).json({ error: "No active lease found" });
     }
 
-    // Get current month's rent schedule
+    // Get current month's rent schedule (check both pending and paid)
     const currentMonth = new Date().toISOString().slice(0, 7); // YYYY-MM
     let [[rentSchedule]] = await db.execute(`
       SELECT * FROM rent_schedules 
-      WHERE lease_id = ? AND month_year = ? AND status = 'pending'
+      WHERE lease_id = ? AND month_year = ?
       ORDER BY due_date ASC LIMIT 1
     `, [lease.lease_id, currentMonth]);
 
@@ -102,27 +141,34 @@ router.get("/tenant/rent-status/:tenant_id", authenticateUser, async (req, res) 
       // Fetch the newly created schedule
       [[rentSchedule]] = await db.execute(`
         SELECT * FROM rent_schedules 
-        WHERE lease_id = ? AND month_year = ? AND status = 'pending'
+        WHERE lease_id = ? AND month_year = ?
         ORDER BY due_date ASC LIMIT 1
       `, [lease.lease_id, currentMonth]);
     }
 
-    // Calculate late fees if overdue
+    // Calculate late fees if overdue (only for pending schedules)
     let lateFeeAmount = 0;
     let isOverdue = false;
+    let totalDue = 0;
     
     if (rentSchedule) {
-      const dueDate = new Date(rentSchedule.due_date);
-      const today = new Date();
-      const gracePeriod = lease.grace_period_days || 5;
-      
-      if (today > dueDate) {
-        const daysLate = Math.ceil((today - dueDate) / (1000 * 60 * 60 * 24));
-        if (daysLate > gracePeriod) {
-          isOverdue = true;
-          const lateFeePercentage = lease.late_fee_percentage || 5.00;
-          lateFeeAmount = (rentSchedule.amount * lateFeePercentage) / 100;
+      if (rentSchedule.status === 'pending') {
+        const dueDate = new Date(rentSchedule.due_date);
+        const today = new Date();
+        const gracePeriod = lease.grace_period_days || 5;
+        
+        if (today > dueDate) {
+          const daysLate = Math.ceil((today - dueDate) / (1000 * 60 * 60 * 24));
+          if (daysLate > gracePeriod) {
+            isOverdue = true;
+            const lateFeePercentage = lease.late_fee_percentage || 5.00;
+            lateFeeAmount = (rentSchedule.amount * lateFeePercentage) / 100;
+          }
         }
+        totalDue = rentSchedule.amount + lateFeeAmount;
+      } else {
+        // Schedule is paid, no due amount
+        totalDue = 0;
       }
     }
 
@@ -141,7 +187,8 @@ router.get("/tenant/rent-status/:tenant_id", authenticateUser, async (req, res) 
       currentRent: rentSchedule,
       lateFeeAmount,
       isOverdue,
-      totalDue: rentSchedule ? rentSchedule.amount + lateFeeAmount : 0,
+      totalDue,
+      isPaid: rentSchedule ? rentSchedule.status === 'paid' : false,
       paymentHistory
     });
   } catch (error) {
@@ -256,13 +303,33 @@ router.post("/tenant/pay-rent", authenticateUser, async (req, res) => {
 
     const paymentId = paymentResult.insertId;
 
-    // Update rent schedule if provided
-    if (schedule_id) {
+    // Update rent schedule - find the current month's pending schedule if not provided
+    let scheduleToUpdate = schedule_id;
+    if (!scheduleToUpdate) {
+      // Find the current month's pending rent schedule
+      const currentMonth = new Date().toISOString().slice(0, 7);
+      const [[currentSchedule]] = await db.execute(`
+        SELECT schedule_id FROM rent_schedules 
+        WHERE lease_id = ? AND month_year = ? AND status = 'pending'
+        ORDER BY due_date ASC LIMIT 1
+      `, [lease_id, currentMonth]);
+      
+      if (currentSchedule) {
+        scheduleToUpdate = currentSchedule.schedule_id;
+      }
+    }
+
+    // Update rent schedule if found
+    if (scheduleToUpdate) {
       await db.execute(`
         UPDATE rent_schedules 
         SET status = 'paid', payment_id = ?, late_fee_amount = ?
         WHERE schedule_id = ?
-      `, [paymentId, lateFeeAmount, schedule_id]);
+      `, [paymentId, lateFeeAmount, scheduleToUpdate]);
+      
+      console.log(`Updated rent schedule ${scheduleToUpdate} to paid status`);
+    } else {
+      console.log('No rent schedule found to update');
     }
 
     res.status(201).json({
@@ -334,6 +401,89 @@ router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
     });
   } catch (error) {
     console.error("Debug error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create rent schedules for all existing leases
+router.post("/create-all-rent-schedules", authenticateUser, async (req, res) => {
+  try {
+    // Get all active leases
+    const [leases] = await db.execute(`
+      SELECT * FROM leases WHERE end_date >= CURDATE()
+    `);
+    
+    let createdCount = 0;
+    let errorCount = 0;
+    
+    for (const lease of leases) {
+      try {
+        const success = await createRentSchedules(
+          lease.lease_id,
+          lease.start_date,
+          lease.end_date,
+          lease.rent_amount,
+          lease.due_date
+        );
+        
+        if (success) {
+          createdCount++;
+        } else {
+          errorCount++;
+        }
+      } catch (error) {
+        console.error(`Error creating schedules for lease ${lease.lease_id}:`, error);
+        errorCount++;
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      message: `Rent schedules created for ${createdCount} leases`,
+      created: createdCount,
+      errors: errorCount,
+      total_leases: leases.length
+    });
+  } catch (error) {
+    console.error("Error creating rent schedules:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create rent schedules for existing lease
+router.post("/create-rent-schedules/:lease_id", authenticateUser, async (req, res) => {
+  try {
+    const lease_id = req.params.lease_id;
+    
+    // Get lease details
+    const [[lease]] = await db.execute(`
+      SELECT * FROM leases WHERE lease_id = ?
+    `, [lease_id]);
+    
+    if (!lease) {
+      return res.status(404).json({ error: "Lease not found" });
+    }
+    
+    // Create rent schedules
+    const success = await createRentSchedules(
+      lease.lease_id,
+      lease.start_date,
+      lease.end_date,
+      lease.rent_amount,
+      lease.due_date
+    );
+    
+    if (success) {
+      res.json({ 
+        success: true, 
+        message: "Rent schedules created successfully",
+        lease_id: lease.lease_id
+      });
+    } else {
+      res.status(500).json({ error: "Failed to create rent schedules" });
+    }
+  } catch (error) {
+    console.error("Error creating rent schedules:", error);
     res.status(500).json({ error: error.message });
   }
 });
