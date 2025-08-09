@@ -78,6 +78,34 @@ router.get("/dashboard/:id", async (req, res) => {
   }
 });
 
+// Get tasks for supplier
+router.get("/tasks/:id", authenticateSupplier, async (req, res) => {
+  try {
+    const supplier_id = req.params.id;
+    const [tasks] = await db.execute(`
+      SELECT 
+        mr.*,
+        p.title as property_title,
+        u.first_name as tenant_first_name,
+        u.last_name as tenant_last_name,
+        mq.amount as quote_amount,
+        mq.status as quote_status,
+        mq.payment_status
+      FROM maintenance_requests mr
+      LEFT JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users u ON mr.tenant_id = u.user_id
+      LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id AND mq.supplier_id = ?
+      WHERE mr.supplier_id = ?
+      ORDER BY mr.created_at DESC
+    `, [supplier_id, supplier_id]);
+    
+    res.json({ tasks });
+  } catch (error) {
+    console.error("Error fetching supplier tasks:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get/update supplier profile
 router.get("/profile/:id", async (req, res) => {
   try {

@@ -1,7 +1,103 @@
 
 import express from "express";
 import { db } from "../../db.js";
+import jwt from "jsonwebtoken";
 const router = express.Router();
+
+// Authentication middleware
+const authenticateUser = (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+};
+
+// Get all maintenance requests for investor
+router.get("/requests", authenticateUser, async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT 
+        mr.*,
+        u.first_name as tenant_first_name,
+        u.last_name as tenant_last_name,
+        p.title as property_title,
+        p.address as property_address,
+        sup.first_name as supplier_first_name,
+        sup.last_name as supplier_last_name,
+        mq.amount as quote_amount,
+        mq.status as quote_status,
+        mq.payment_status
+      FROM maintenance_requests mr
+      LEFT JOIN users u ON mr.tenant_id = u.user_id
+      LEFT JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users sup ON mr.supplier_id = sup.user_id
+      LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id AND mq.status = 'accepted'
+      WHERE p.investor_id = ?
+      ORDER BY mr.created_at DESC
+    `, [req.user.userId]);
+    
+    res.json({ requests: rows });
+  } catch (err) {
+    console.error("Error fetching maintenance requests:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get completed maintenance requests for supplier payments
+router.get("/completed-requests", authenticateUser, async (req, res) => {
+  try {
+    const [rows] = await db.execute(`
+      SELECT 
+        mr.*,
+        u.first_name as tenant_first_name,
+        u.last_name as tenant_last_name,
+        p.title as property_title,
+        sup.first_name as supplier_first_name,
+        sup.last_name as supplier_last_name,
+        mq.quote_id,
+        mq.amount as quote_amount,
+        mq.status as quote_status,
+        mq.payment_status
+      FROM maintenance_requests mr
+      LEFT JOIN users u ON mr.tenant_id = u.user_id
+      LEFT JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users sup ON mr.supplier_id = sup.user_id
+      LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id 
+      WHERE mr.status = 'completed' AND mq.status = 'accepted'
+      ORDER BY mr.updated_at DESC
+    `, []);
+    
+    res.json({ requests: rows });
+  } catch (err) {
+    console.error("Error fetching completed requests:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update maintenance request status
+router.put("/requests/:id/status", authenticateUser, async (req, res) => {
+  try {
+    const { status, supplier_id } = req.body;
+    
+    await db.execute(`
+      UPDATE maintenance_requests 
+      SET status = ?, supplier_id = ?, updated_at = NOW() 
+      WHERE request_id = ?
+    `, [status, supplier_id || null, req.params.id]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error updating request status:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 
 // Delete a maintenance request
