@@ -5,7 +5,7 @@ import jwt from "jsonwebtoken";
 const router = express.Router();
 
 // Set default JWT_SECRET for local development
-const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-development';
+const JWT_SECRET = process.env.JWT_SECRET;
 
 // Helper function to safely execute SQL with fallback for missing columns
 const safeExecute = async (sql, params = []) => {
@@ -349,11 +349,13 @@ router.get("/tenant/payment-history/:tenant_id", authenticateUser, async (req, r
     console.log('Page:', page, 'Limit:', limit, 'Offset:', offset);
 
     const [payments] = await db.execute(`
-      SELECT p.*, rs.month_year, l.rent_amount, prop.title as property_title
+      SELECT 
+        p.*,
+        l.rent_amount,
+        l.start_date as lease_start,
+        l.end_date as lease_end
       FROM payments p 
-      LEFT JOIN rent_schedules rs ON p.payment_id = rs.payment_id
       LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN property prop ON l.property_id = p.property_id
       WHERE p.tenant_id = ? AND p.payment_type = 'rent'
       ORDER BY p.payment_date DESC 
       LIMIT ? OFFSET ?
