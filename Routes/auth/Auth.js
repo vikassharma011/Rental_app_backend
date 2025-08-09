@@ -6,6 +6,10 @@ import { sendEmail } from "../../utils/sendEmail.js";
 import { authenticateInvestor } from "../../middlewares/authenticateInvestor.js";
 
 dotenv.config();
+
+// Set default JWT_SECRET for local development
+const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-development';
+
 const router = express.Router();
 
 // ✅ SIGNUP
