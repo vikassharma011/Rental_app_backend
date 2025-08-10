@@ -1,3 +1,5 @@
+// Inventory Requests API
+
 // src/index.ts
 import express from "express";
 import cors from "cors" ; 
@@ -97,6 +99,10 @@ app.use("/investor/documents", DocumentsRouter);
 
 // Add common messaging routes
 app.use("/messaging", CommonMessagingRouter);
+
+import InventoryRequestsRouter from "./Routes/InventoryRequests.js";
+// Supplier Inventory Requests API
+app.use("/inventory", InventoryRequestsRouter);
 
 app.get("/", (req, res) => {
   res.send("Hello, Rental App!");
