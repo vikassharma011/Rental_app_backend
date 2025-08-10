@@ -81,13 +81,19 @@ router.put("/:id/status", async (req, res) => {
 });
 
 // Get all payments (admin/investor)
+// Get all payments with tenant first_name
 router.get("/all", async (req, res) => {
   try {
-    const [payments] = await db.execute(`SELECT * FROM payments`);
+    const [payments] = await db.execute(`
+      SELECT p.*, u.first_name
+      FROM payments p
+      LEFT JOIN users u ON p.tenant_id = u.user_id
+    `);
     res.json({ payments });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
 
 export { router as PaymentsRouter };
