@@ -71,11 +71,14 @@ router.get("/properties", async (req, res) => {
 /**
  * ✅ Get Single Property with All Related Data
  */
+/**
+ * ✅ Get Single Property with All Related Data
+ */
 router.get("/property/:id", async (req, res) => {
   const propertyId = req.params.id;
 
   try {
-    // 1️⃣ Fetch property details
+    // 1️⃣ Property details
     const [propertyRows] = await db.execute(
       "SELECT * FROM property WHERE property_id = ?",
       [propertyId]
@@ -87,7 +90,7 @@ router.get("/property/:id", async (req, res) => {
 
     const property = propertyRows[0];
 
-    // 2️⃣ Fetch related data
+    // 2️⃣ Related data
     const [documents] = await db.execute(
       "SELECT * FROM documents WHERE property_id = ?",
       [propertyId]
@@ -108,12 +111,16 @@ router.get("/property/:id", async (req, res) => {
       [propertyId]
     );
 
+    // ✅ Payments linked via lease_id
     const [payments] = await db.execute(
-      "SELECT * FROM payments WHERE property_id = ?",
+      `SELECT p.* 
+       FROM payments p
+       JOIN leases l ON p.lease_id = l.lease_id
+       WHERE l.property_id = ?`,
       [propertyId]
     );
 
-    // 3️⃣ Send full response
+    // 3️⃣ Send response
     res.status(200).json({
       ...property,
       documents,
@@ -128,6 +135,7 @@ router.get("/property/:id", async (req, res) => {
     res.status(500).json({ error: "Failed to fetch property details" });
   }
 });
+
 
 
 
