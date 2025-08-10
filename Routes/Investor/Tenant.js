@@ -1,3 +1,4 @@
+
 import express from "express";
 import dotenv from "dotenv";
 import { db } from "../../db.js";
@@ -8,6 +9,23 @@ import { sendEmail } from "../../utils/sendEmail.js";
 const router = express.Router();
 
 dotenv.config();
+
+// Get auto-pay settings for a tenant
+router.get("/auto-pay/:tenant_id", async (req, res) => {
+  try {
+    const tenant_id = req.params.tenant_id;
+    const [settings] = await db.execute(`
+      SELECT aps.*, tpm.payment_type, tpm.card_last4, tpm.bank_name, tpm.upi_id
+      FROM auto_pay_settings aps
+      JOIN tenant_payment_methods tpm ON aps.payment_method_id = tpm.method_id
+      WHERE aps.tenant_id = ? AND aps.is_active = 1
+    `, [tenant_id]);
+    res.json({ settings });
+  } catch (error) {
+    console.error("Error getting auto-pay settings:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // GET tenants
 router.get("/tenant", async (req, res) => {
