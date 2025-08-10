@@ -50,13 +50,17 @@ router.post("/add/property", async (req, res) => {
 // /Routes/Investor/Property.js
 router.get("/properties", async (req, res) => {
   const investor_id = req.query.investor_id;
-  if (!investor_id) return res.status(400).json({ error: "Investor ID missing" });
-
+  
   try {
-    const [properties] = await db.execute(
-      "SELECT * FROM property WHERE investor_id = ?",
-      [investor_id]
-    );
+    let query = "SELECT * FROM property";
+    let params = [];
+    
+    if (investor_id) {
+      query += " WHERE investor_id = ?";
+      params = [investor_id];
+    }
+    
+    const [properties] = await db.execute(query, params);
     res.status(200).json({ properties });
   } catch (err) {
     console.error("Fetch error:", err);

@@ -397,4 +397,57 @@ router.get("/messaging/unread/:userId", async (req, res) => {
   }
 });
 
+// Get tenant's lease information
+router.get("/leases", authenticateTenant, async (req, res) => {
+  try {
+    const [leases] = await db.execute(`
+      SELECT 
+        l.*,
+        p.title as property_title,
+        p.address as property_address,
+        i.first_name as landlord_first_name,
+        i.last_name as landlord_last_name
+      FROM leases l
+      LEFT JOIN property p ON l.property_id = p.property_id
+      LEFT JOIN users i ON p.investor_id = i.user_id
+      WHERE l.tenant_id = ?
+      ORDER BY l.start_date DESC
+    `, [req.user.userId]);
+    
+    res.json({ leases });
+  } catch (error) {
+    console.error('Error fetching leases:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's lease by ID
+router.get("/lease/:id", authenticateTenant, async (req, res) => {
+  try {
+    const [[lease]] = await db.execute(`
+      SELECT 
+        l.*,
+        p.title as property_title,
+        p.address as property_address,
+        i.first_name as landlord_first_name,
+        i.last_name as landlord_last_name,
+        i.phone as landlord_phone,
+        i.email as landlord_email
+      FROM leases l
+      LEFT JOIN property p ON l.property_id = p.property_id
+      LEFT JOIN users i ON p.investor_id = i.user_id
+      WHERE l.lease_id = ? AND l.tenant_id = ?
+    `, [req.params.id, req.user.userId]);
+    
+    if (!lease) {
+      return res.status(404).json({ error: "Lease not found" });
+    }
+    
+    res.json({ lease });
+  } catch (error) {
+    console.error('Error fetching lease:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export { router as TenantPortalRouter };

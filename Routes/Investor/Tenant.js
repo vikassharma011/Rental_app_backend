@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { db } from "../../db.js";
 import { authenticateInvestor } from "../../middlewares/authenticateInvestor.js";
 import jwt from "jsonwebtoken";
+import { sendEmail } from "../../utils/sendEmail.js";
 
 const router = express.Router();
 
@@ -97,7 +98,7 @@ router.post("/tenant-requests/:id/:action", async (req, res) => {
 });
 
 // ✅ Add Tenant to Lease
-router.post("/tenant", async (req, res) => {
+router.post("/add/tenant", async (req, res) => {
   const { tenant_id, property_id, lease_start, lease_end, rent_amount } = req.body;
 
   try {
