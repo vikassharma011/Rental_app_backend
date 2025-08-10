@@ -3,12 +3,13 @@ const router = express.Router();
 import { db } from '../db.js';
 
 // Supplier submits a new inventory request (simple: item_name, supplier_id)
+// Supplier submits a new inventory request (with all required fields)
 router.post('/supplier/inventory-request', async (req, res) => {
-  const { item_name, supplier_id } = req.body;
+  const { item_name, supplier_id, property_id, item_type, purchase_date, warranty_end_date } = req.body;
   try {
     await db.query(
-      `INSERT INTO inventory_requests (item_name, supplier_id, status) VALUES (?, ?, 'pending')`,
-      [item_name, supplier_id]
+      `INSERT INTO inventory_requests (item_name, supplier_id, property_id, item_type, purchase_date, warranty_end_date, status) VALUES (?, ?, ?, ?, ?, ?, 'pending')`,
+      [item_name, supplier_id, property_id, item_type, purchase_date, warranty_end_date]
     );
     res.json({ success: true, message: 'Inventory request submitted.' });
   } catch (err) {
@@ -20,15 +21,17 @@ router.post('/supplier/inventory-request', async (req, res) => {
 router.get('/investor/inventory-requests', async (req, res) => {
   try {
     const [requests] = await db.query(
-      `SELECT ir.*, u.first_name AS supplier_first_name, u.last_name AS supplier_last_name
+      `SELECT ir.*, u.first_name AS supplier_first_name, u.last_name AS supplier_last_name, p.title AS property_title
        FROM inventory_requests ir
        LEFT JOIN users u ON ir.supplier_id = u.user_id
+       LEFT JOIN property p ON ir.property_id = p.property_id
        WHERE ir.status = 'pending'`
     );
-    // Add supplier_name for frontend
+    // Add supplier_name and property_title for frontend
     const formatted = requests.map(r => ({
       ...r,
-      supplier_name: `${r.supplier_first_name || ''} ${r.supplier_last_name || ''}`.trim()
+      supplier_name: `${r.supplier_first_name || ''} ${r.supplier_last_name || ''}`.trim(),
+      property_title: r.property_title || r.property_id
     }));
     res.json({ requests: formatted });
   } catch (err) {
