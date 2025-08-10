@@ -133,15 +133,15 @@ async function getInvestorContacts(investorId, search) {
       u.email,
       p.property_id,
       p.title AS property_name,
-      0 AS unread_count,
-      'No messages yet' AS last_message,
-      NULL AS last_message_time
+      (SELECT COUNT(*) FROM messages m WHERE m.sender_id = u.user_id AND m.receiver_id = ? AND m.is_read = 0) AS unread_count,
+      (SELECT m.content FROM messages m WHERE ((m.sender_id = u.user_id AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = u.user_id)) ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+      (SELECT m.created_at FROM messages m WHERE ((m.sender_id = u.user_id AND m.receiver_id = ?) OR (m.sender_id = ? AND m.receiver_id = u.user_id)) ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
     FROM users u
     JOIN leases l ON u.user_id = l.tenant_id
     JOIN property p ON l.property_id = p.property_id
     WHERE p.investor_id = ? AND u.is_active = 1 AND u.role = 'tenant'
   `;
-  let tenantParams = [investorId];
+  let tenantParams = [investorId, investorId, investorId, investorId, investorId, investorId];
   
   if (search) {
     tenantSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
