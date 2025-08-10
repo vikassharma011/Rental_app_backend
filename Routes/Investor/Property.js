@@ -68,6 +68,67 @@ router.get("/properties", async (req, res) => {
   }
 });
 
+/**
+ * ✅ Get Single Property with All Related Data
+ */
+router.get("/property/:id", async (req, res) => {
+  const propertyId = req.params.id;
+
+  try {
+    // 1️⃣ Fetch property details
+    const [propertyRows] = await db.execute(
+      "SELECT * FROM property WHERE property_id = ?",
+      [propertyId]
+    );
+
+    if (propertyRows.length === 0) {
+      return res.status(404).json({ error: "Property not found" });
+    }
+
+    const property = propertyRows[0];
+
+    // 2️⃣ Fetch related data
+    const [documents] = await db.execute(
+      "SELECT * FROM documents WHERE property_id = ?",
+      [propertyId]
+    );
+
+    const [inventory] = await db.execute(
+      "SELECT * FROM inventory_items WHERE property_id = ?",
+      [propertyId]
+    );
+
+    const [maintenance] = await db.execute(
+      "SELECT * FROM maintenance_requests WHERE property_id = ?",
+      [propertyId]
+    );
+
+    const [leases] = await db.execute(
+      "SELECT * FROM leases WHERE property_id = ?",
+      [propertyId]
+    );
+
+    const [payments] = await db.execute(
+      "SELECT * FROM payments WHERE property_id = ?",
+      [propertyId]
+    );
+
+    // 3️⃣ Send full response
+    res.status(200).json({
+      ...property,
+      documents,
+      inventory,
+      maintenance,
+      leases,
+      payments,
+    });
+
+  } catch (err) {
+    console.error("Fetch property details error:", err);
+    res.status(500).json({ error: "Failed to fetch property details" });
+  }
+});
+
 
 
 export { router as PropertyRouter };
