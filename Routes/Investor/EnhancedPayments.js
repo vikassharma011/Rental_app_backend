@@ -970,4 +970,18 @@ router.get("/investor/payment-summary", authenticateUser, async (req, res) => {
   }
 });
 
+router.get("/investor/dashboard/:userId", async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    // Example: Get payments summary for investor
+    const [payments] = await db.execute(
+      "SELECT * FROM payments WHERE investor_id = ?",
+      [userId]
+    );
+    res.json({ payments });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export { router as EnhancedPaymentsRouter };

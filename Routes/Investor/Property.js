@@ -68,6 +68,31 @@ router.get("/properties", async (req, res) => {
   }
 });
 
+// ...existing code...
+router.get("/leases", async (req, res) => {
+  try {
+    const investor_id = req.query.investor_id;
+    let query = `
+      SELECT l.*, 
+        u.first_name as tenant_first_name, u.last_name as tenant_last_name,
+        p.title as property_title
+      FROM leases l
+      JOIN users u ON l.tenant_id = u.user_id
+      JOIN property p ON l.property_id = p.property_id
+    `;
+    let params = [];
+    if (investor_id) {
+      query += " WHERE p.investor_id = ?";
+      params = [investor_id];
+    }
+    const [leases] = await db.execute(query, params);
+    res.json({ leases });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+// ...existing code...
+
 /**
  * ✅ Get Single Property with All Related Data
  */
