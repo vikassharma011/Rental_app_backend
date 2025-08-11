@@ -973,9 +973,12 @@ router.get("/investor/payment-summary", authenticateUser, async (req, res) => {
 router.get("/investor/dashboard/:userId", async (req, res) => {
   try {
     const userId = req.params.userId;
-    // Example: Get payments summary for investor
+    // Join payments with property to get investor_id
     const [payments] = await db.execute(
-      "SELECT * FROM payments WHERE investor_id = ?",
+      `SELECT p.*, pr.investor_id 
+       FROM payments p
+       JOIN property pr ON p.property_id = pr.property_id
+       WHERE pr.investor_id = ?`,
       [userId]
     );
     res.json({ payments });
