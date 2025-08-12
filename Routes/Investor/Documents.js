@@ -41,29 +41,83 @@ router.get("/documents", authenticateUser, async (req, res) => {
   }
 });
 
+// Update a document
+router.put("/documents/:id", authenticateUser, async (req, res) => {
+  try {
+    const { file_name, doc_type, property_id, visible_to_tenant, visible_to_supplier } = req.body;
+
+    if (!file_name || !doc_type || !property_id) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const [result] = await db.execute(`
+      UPDATE documents d
+      LEFT JOIN property p ON d.property_id = p.property_id
+      SET 
+        d.file_name = ?, 
+        d.doc_type = ?, 
+        d.property_id = ?, 
+        d.visible_to_tenant = ?, 
+        d.visible_to_supplier = ?
+      WHERE d.document_id = ? 
+      AND (p.investor_id = ? OR d.uploaded_by = ?)
+    `, [
+      file_name,
+      doc_type,
+      property_id,
+      visible_to_tenant ? 1 : 0,
+      visible_to_supplier ? 1 : 0,
+      req.params.id,
+      req.user.userId,
+      req.user.userId
+    ]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Document not found or unauthorized" });
+    }
+
+    res.json({ message: "Document updated successfully" });
+  } catch (err) {
+    console.error("Error updating document:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
 // Upload new document
 router.post("/documents", authenticateUser, async (req, res) => {
   try {
     const { property_id, file_name, doc_type, file_url, visible_to_tenant, visible_to_supplier } = req.body;
     
-    if (!property_id || !file_name || !doc_type) {
+    if (!property_id || !file_name || !doc_type || !file_url) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     const [result] = await db.execute(`
-      INSERT INTO documents (property_id, uploaded_by, role, file_url, doc_type, visible_to_tenant, visible_to_supplier, created_at)
-      VALUES (?, ?, 'investor', ?, ?, ?, ?, NOW())
-    `, [property_id, req.user.userId, file_url || file_name, doc_type, visible_to_tenant ? 1 : 0, visible_to_supplier ? 1 : 0]);
+      INSERT INTO documents 
+      (property_id, uploaded_by, role, file_name, file_url, doc_type, visible_to_tenant, visible_to_supplier, created_at)
+      VALUES (?, ?, 'investor', ?, ?, ?, ?, ?, NOW())
+    `, [
+      property_id,
+      req.user.userId,
+      file_name,
+      file_url,
+      doc_type,
+      visible_to_tenant ? 1 : 0,
+      visible_to_supplier ? 1 : 0
+    ]);
     
     res.status(201).json({ 
       message: "Document uploaded successfully", 
       document_id: result.insertId 
     });
+
   } catch (err) {
     console.error("Error uploading document:", err);
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // Delete document
 router.delete("/documents/:id", authenticateUser, async (req, res) => {
@@ -129,5 +183,25 @@ router.get("/uploaded/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+router.delete("/documents/:id", authenticateUser, async (req, res) => {
+  try {
+    const [result] = await db.execute(`
+      DELETE d FROM documents d
+      LEFT JOIN property p ON d.property_id = p.property_id
+      WHERE d.document_id = ? AND (p.investor_id = ? OR d.uploaded_by = ?)
+    `, [req.params.id, req.user.userId, req.user.userId]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Document not found or unauthorized" });
+    }
+    
+    res.json({ message: "Document deleted successfully" });
+  } catch (err) {
+    console.error("Error deleting document:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 
 export { router as DocumentsRouter };
