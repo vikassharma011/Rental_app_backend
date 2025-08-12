@@ -87,7 +87,7 @@ router.put("/documents/:id", authenticateUser, async (req, res) => {
 // Upload new document
 router.post("/documents", authenticateUser, async (req, res) => {
   try {
-    const { property_id, file_name, doc_type, file_url, visible_to_tenant, visible_to_supplier } = req.body;
+    const { property_id, document_name, doc_type, file_url, visible_to_tenant, visible_to_supplier } = req.body;
     
     if (!property_id || !file_name || !doc_type || !file_url) {
       return res.status(400).json({ error: "Missing required fields" });
@@ -95,12 +95,12 @@ router.post("/documents", authenticateUser, async (req, res) => {
 
     const [result] = await db.execute(`
       INSERT INTO documents 
-      (property_id, uploaded_by, role, file_name, file_url, doc_type, visible_to_tenant, visible_to_supplier, created_at)
+      (property_id, uploaded_by, role, document_name, file_url, doc_type, visible_to_tenant, visible_to_supplier, created_at)
       VALUES (?, ?, 'investor', ?, ?, ?, ?, ?, NOW())
     `, [
       property_id,
       req.user.userId,
-      file_name,
+      document_name,
       file_url,
       doc_type,
       visible_to_tenant ? 1 : 0,
