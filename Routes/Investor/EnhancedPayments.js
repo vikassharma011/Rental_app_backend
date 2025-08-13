@@ -738,7 +738,7 @@ router.post("/stripe/create-supplier-payment-intent", async (req, res) => {
 });
 
 router.post("/investor/pay-supplier", async (req, res) => {
-  const db = req.app.get("db"); // get db instance
+  // const db = req.app.get("db"); // get db instance
   const {
     supplier_id,
     maintenance_request_id,
