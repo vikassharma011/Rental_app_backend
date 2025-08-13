@@ -707,75 +707,159 @@ router.get("/supplier/pending-payments/:supplier_id", authenticateUser, async (r
   }
 });
 
-// Process supplier payment (by investor)
-router.post("/investor/pay-supplier", authenticateUser, async (req, res) => {
+router.post("/stripe/create-supplier-payment-intent", async (req, res) => {
   try {
-    const { 
-      supplier_id, 
-      maintenance_request_id, 
-      quote_id, 
-      amount, 
-      payment_method,
-      remarks 
-    } = req.body;
+    const { supplier_id, maintenance_request_id, quote_id, amount, currency } = req.body;
 
-    if (!supplier_id || !maintenance_request_id || !quote_id || !amount) {
+    if (!supplier_id || !maintenance_request_id || !quote_id || !amount || !currency) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Verify the quote is accepted and payment is pending
-    const [[quote]] = await db.execute(`
-      SELECT mq.*, mr.status as request_status
-      FROM maintenance_quotes mq
-      JOIN maintenance_requests mr ON mq.request_id = mr.request_id
-      WHERE mq.quote_id = ? AND mq.supplier_id = ? 
-        AND mq.status = 'accepted' AND mq.payment_status = 'pending'
-        AND mr.status = 'completed'
-    `, [quote_id, supplier_id]);
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // convert to smallest currency unit
+      currency,
+      metadata: {
+        supplier_id,
+        maintenance_request_id,
+        quote_id
+      }
+    });
 
-    if (!quote) {
-      return res.status(400).json({ error: "Invalid quote or request not completed" });
-    }
-
-    const transactionId = `SUP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-    // Insert supplier payment record
-    const [supplierPaymentResult] = await db.execute(`
-      INSERT INTO supplier_payments (
-        supplier_id, maintenance_request_id, quote_id, amount,
-        payment_method, transaction_id, payment_date, remarks, status
-      ) VALUES (?, ?, ?, ?, ?, ?, CURDATE(), ?, 'completed')
-    `, [supplier_id, maintenance_request_id, quote_id, amount, 
-        payment_method || 'bank_transfer', transactionId, remarks]);
-
-    const supplierPaymentId = supplierPaymentResult.insertId;
-
-    // Update quote payment status
-    await db.execute(`
-      UPDATE maintenance_quotes 
-      SET payment_status = 'paid', payment_id = ?
-      WHERE quote_id = ?
-    `, [supplierPaymentId, quote_id]);
-
-    // Also insert into main payments table for consistency
-    await db.execute(`
-      INSERT INTO payments (
-        supplier_id, amount, payment_type, payment_method, 
-        transaction_id, payment_date, remarks, status
-      ) VALUES (?, ?, 'supplier', ?, ?, CURDATE(), ?, 'completed')
-    `, [supplier_id, amount, payment_method || 'bank_transfer', transactionId, remarks]);
-
-    res.status(201).json({
-      success: true,
-      supplier_payment_id: supplierPaymentId,
-      transaction_id: transactionId,
-      amount: amount
+    res.json({
+      client_secret: paymentIntent.client_secret,
+      payment_intent_id: paymentIntent.id
     });
   } catch (error) {
-    console.error("Error processing supplier payment:", error);
+    console.error("Stripe PI creation error:", error);
     res.status(500).json({ error: error.message });
   }
 });
+
+router.post("/investor/pay-supplier", async (req, res) => {
+  const db = req.app.get("db"); // get db instance
+  const {
+    supplier_id,
+    maintenance_request_id,
+    quote_id,
+    amount,
+    remarks,
+    payment_method,
+    payment_intent_id
+  } = req.body;
+
+  try {
+    // If Stripe payment, verify status
+    if (payment_method === "stripe_card") {
+      if (!payment_intent_id) {
+        return res.status(400).json({ error: "Missing Stripe payment_intent_id" });
+      }
+
+      const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id);
+      if (paymentIntent.status !== "succeeded") {
+        return res.status(400).json({ error: "Stripe payment not completed" });
+      }
+    }
+
+    // Save payment and update status
+    await db.tx(async t => {
+      await t.none(`
+        INSERT INTO supplier_payments
+          (supplier_id, maintenance_request_id, quote_id, amount, remarks, payment_method, stripe_payment_intent_id, status, created_at)
+        VALUES
+          ($1, $2, $3, $4, $5, $6, $7, 'completed', NOW())
+      `, [
+        supplier_id,
+        maintenance_request_id,
+        quote_id,
+        amount,
+        remarks,
+        payment_method,
+        payment_intent_id || null
+      ]);
+
+      await t.none(`
+        UPDATE maintenance_requests
+        SET payment_status = 'paid'
+        WHERE id = $1
+      `, [maintenance_request_id]);
+    });
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Pay supplier error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Process supplier payment (by investor)
+// router.post("/investor/pay-supplier", authenticateUser, async (req, res) => {
+//   try {
+//     const { 
+//       supplier_id, 
+//       maintenance_request_id, 
+//       quote_id, 
+//       amount, 
+//       payment_method,
+//       remarks 
+//     } = req.body;
+
+//     if (!supplier_id || !maintenance_request_id || !quote_id || !amount) {
+//       return res.status(400).json({ error: "Missing required fields" });
+//     }
+
+//     // Verify the quote is accepted and payment is pending
+//     const [[quote]] = await db.execute(`
+//       SELECT mq.*, mr.status as request_status
+//       FROM maintenance_quotes mq
+//       JOIN maintenance_requests mr ON mq.request_id = mr.request_id
+//       WHERE mq.quote_id = ? AND mq.supplier_id = ? 
+//         AND mq.status = 'accepted' AND mq.payment_status = 'pending'
+//         AND mr.status = 'completed'
+//     `, [quote_id, supplier_id]);
+
+//     if (!quote) {
+//       return res.status(400).json({ error: "Invalid quote or request not completed" });
+//     }
+
+//     const transactionId = `SUP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+//     // Insert supplier payment record
+//     const [supplierPaymentResult] = await db.execute(`
+//       INSERT INTO supplier_payments (
+//         supplier_id, maintenance_request_id, quote_id, amount,
+//         payment_method, transaction_id, payment_date, remarks, status
+//       ) VALUES (?, ?, ?, ?, ?, ?, CURDATE(), ?, 'completed')
+//     `, [supplier_id, maintenance_request_id, quote_id, amount, 
+//         payment_method || 'bank_transfer', transactionId, remarks]);
+
+//     const supplierPaymentId = supplierPaymentResult.insertId;
+
+//     // Update quote payment status
+//     await db.execute(`
+//       UPDATE maintenance_quotes 
+//       SET payment_status = 'paid', payment_id = ?
+//       WHERE quote_id = ?
+//     `, [supplierPaymentId, quote_id]);
+
+//     // Also insert into main payments table for consistency
+//     await db.execute(`
+//       INSERT INTO payments (
+//         supplier_id, amount, payment_type, payment_method, 
+//         transaction_id, payment_date, remarks, status
+//       ) VALUES (?, ?, 'supplier', ?, ?, CURDATE(), ?, 'completed')
+//     `, [supplier_id, amount, payment_method || 'bank_transfer', transactionId, remarks]);
+
+//     res.status(201).json({
+//       success: true,
+//       supplier_payment_id: supplierPaymentId,
+//       transaction_id: transactionId,
+//       amount: amount
+//     });
+//   } catch (error) {
+//     console.error("Error processing supplier payment:", error);
+//     res.status(500).json({ error: error.message });
+//   }
+// });
 
 // Get supplier payment history
 router.get("/supplier/payment-history/:supplier_id", authenticateUser, async (req, res) => {
