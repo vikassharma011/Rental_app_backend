@@ -738,7 +738,6 @@ router.post("/stripe/create-supplier-payment-intent", async (req, res) => {
 });
 
 router.post("/investor/pay-supplier", async (req, res) => {
-  // const db = req.app.get("db"); // get db instance
   const {
     supplier_id,
     maintenance_request_id,
@@ -749,47 +748,53 @@ router.post("/investor/pay-supplier", async (req, res) => {
     payment_intent_id
   } = req.body;
 
+  const connection = await db.getConnection(); // mysql2 pool connection
   try {
+    await connection.beginTransaction();
+
     // If Stripe payment, verify status
     if (payment_method === "stripe_card") {
       if (!payment_intent_id) {
+        await connection.rollback();
         return res.status(400).json({ error: "Missing Stripe payment_intent_id" });
       }
 
       const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id);
       if (paymentIntent.status !== "succeeded") {
+        await connection.rollback();
         return res.status(400).json({ error: "Stripe payment not completed" });
       }
     }
 
-    // Save payment and update status
-    await db.tx(async t => {
-      await t.none(`
-        INSERT INTO supplier_payments
-          (supplier_id, maintenance_request_id, quote_id, amount, remarks, payment_method, stripe_payment_intent_id, status, created_at)
-        VALUES
-          ($1, $2, $3, $4, $5, $6, $7, 'completed', NOW())
-      `, [
-        supplier_id,
-        maintenance_request_id,
-        quote_id,
-        amount,
-        remarks,
-        payment_method,
-        payment_intent_id || null
-      ]);
+    await connection.execute(`
+      INSERT INTO supplier_payments
+        (supplier_id, maintenance_request_id, quote_id, amount, remarks, payment_method, stripe_payment_intent_id, status, created_at)
+      VALUES
+        (?, ?, ?, ?, ?, ?, ?, 'completed', NOW())
+    `, [
+      supplier_id,
+      maintenance_request_id,
+      quote_id,
+      amount,
+      remarks,
+      payment_method,
+      payment_intent_id || null
+    ]);
 
-      await t.none(`
-        UPDATE maintenance_requests
-        SET payment_status = 'paid'
-        WHERE id = $1
-      `, [maintenance_request_id]);
-    });
+    await connection.execute(`
+      UPDATE maintenance_requests
+      SET payment_status = 'paid'
+      WHERE request_id = ?
+    `, [maintenance_request_id]);
 
+    await connection.commit();
     res.json({ success: true });
   } catch (error) {
+    await connection.rollback();
     console.error("Pay supplier error:", error);
     res.status(500).json({ error: error.message });
+  } finally {
+    connection.release();
   }
 });
 
