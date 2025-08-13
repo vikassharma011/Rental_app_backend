@@ -1,3 +1,26 @@
+
+
+import express from "express";
+import { db } from "../../db.js";
+import jwt from "jsonwebtoken";
+const router = express.Router();
+
+// Simple authentication middleware for supplier
+function authenticateSupplier(req, res, next) {
+  const token = req.headers.authorization?.split(" ")[1];
+  if (!token) return res.status(401).json({ success: false });
+  try {
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (decoded.role !== "supplier") {
+      return res.status(403).json({ success: false, message: "Only suppliers allowed" });
+    }
+    req.user = decoded;
+    next();
+  } catch {
+    res.status(401).json({ success: false, message: "Invalid token" });
+  }
+}
+
 // Get auto-pay settings for tenants linked to supplier's properties
 router.get("/auto-pay/:supplier_id", authenticateSupplier, async (req, res) => {
   try {
@@ -38,27 +61,6 @@ router.get("/auto-pay/:supplier_id", authenticateSupplier, async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-import express from "express";
-import { db } from "../../db.js";
-import jwt from "jsonwebtoken";
-const router = express.Router();
-
-// Simple authentication middleware for supplier
-function authenticateSupplier(req, res, next) {
-  const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ success: false });
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    if (decoded.role !== "supplier") {
-      return res.status(403).json({ success: false, message: "Only suppliers allowed" });
-    }
-    req.user = decoded;
-    next();
-  } catch {
-    res.status(401).json({ success: false, message: "Invalid token" });
-  }
-}
 
 
 // Get contacts for supplier messaging (investors and tenants linked to supplier)
