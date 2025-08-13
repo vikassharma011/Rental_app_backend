@@ -44,9 +44,9 @@ router.get("/documents", authenticateUser, async (req, res) => {
 // Update a document
 router.put("/documents/:id", authenticateUser, async (req, res) => {
   try {
-    const { file_name, doc_type, property_id, visible_to_tenant, visible_to_supplier } = req.body;
+    const { document_name, doc_type, property_id, visible_to_tenant, visible_to_supplier } = req.body;
 
-    if (!file_name || !doc_type || !property_id) {
+    if (!document_name || !doc_type || !property_id) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
