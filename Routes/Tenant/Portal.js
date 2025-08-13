@@ -69,12 +69,60 @@ router.get('/contacts/:userId', authenticateTenant, async (req, res) => {
 router.get("/dashboard/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
-    // Get lease, payments, maintenance requests summary
-    const [[lease]] = await db.execute("SELECT * FROM leases WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1", [tenant_id]);
-    const [payments] = await db.execute("SELECT * FROM payments WHERE tenant_id = ?", [tenant_id]);
-    const [maintenance] = await db.execute("SELECT * FROM maintenance_requests WHERE tenant_id = ?", [tenant_id]);
-    res.json({ lease, payments, maintenance });
+    
+    // Get lease with property details
+    const [[lease]] = await db.execute(`
+      SELECT l.*, p.title as property_title, p.address as property_address, p.city, p.state
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? 
+      ORDER BY l.start_date DESC 
+      LIMIT 1
+    `, [tenant_id]);
+    
+    // Get recent payments
+    const [payments] = await db.execute(`
+      SELECT * FROM payments 
+      WHERE tenant_id = ? 
+      ORDER BY payment_date DESC 
+      LIMIT 5
+    `, [tenant_id]);
+    
+    // Get maintenance requests with status
+    const [maintenance] = await db.execute(`
+      SELECT mr.*, p.title as property_title
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      WHERE mr.tenant_id = ? 
+      ORDER BY mr.created_at DESC
+    `, [tenant_id]);
+    
+    // Get rent schedules
+    const [rentSchedules] = await db.execute(`
+      SELECT rs.*, l.rent_amount
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      WHERE l.tenant_id = ?
+      ORDER BY rs.due_date DESC
+      LIMIT 3
+    `, [tenant_id]);
+    
+    // Get unread message count
+    const [[unreadResult]] = await db.execute(`
+      SELECT COUNT(*) as unread_count 
+      FROM messages 
+      WHERE receiver_id = ? AND is_read = 0
+    `, [tenant_id]);
+    
+    res.json({ 
+      lease, 
+      payments, 
+      maintenance, 
+      rentSchedules,
+      unreadCount: unreadResult.unread_count || 0
+    });
   } catch (error) {
+    console.error('Dashboard error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -120,9 +168,21 @@ router.get("/documents/:id", async (req, res) => {
     // Get property_id from lease
     const [[lease]] = await db.execute("SELECT property_id FROM leases WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1", [tenant_id]);
     if (!lease) return res.json({ documents: [] });
-    const [docs] = await db.execute("SELECT * FROM documents WHERE property_id = ? AND visible_to_tenant = 1", [lease.property_id]);
+    
+    const [docs] = await db.execute(`
+      SELECT 
+        d.*,
+        CONCAT(u.first_name, ' ', u.last_name) as uploaded_by_name,
+        u.role as uploaded_by_role
+      FROM documents d
+      JOIN users u ON d.uploaded_by = u.user_id
+      WHERE d.property_id = ? AND d.visible_to_tenant = 1
+      ORDER BY d.created_at DESC
+    `, [lease.property_id]);
+    
     res.json({ documents: docs });
   } catch (error) {
+    console.error('Documents fetch error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -142,9 +202,24 @@ router.post("/maintenance", async (req, res) => {
 router.get("/maintenance/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
-    const [requests] = await db.execute("SELECT * FROM maintenance_requests WHERE tenant_id = ?", [tenant_id]);
+    const [requests] = await db.execute(`
+      SELECT 
+        mr.*,
+        p.title as property_title,
+        p.address as property_address,
+        u.first_name as supplier_first_name,
+        u.last_name as supplier_last_name,
+        u.phone as supplier_phone,
+        u.email as supplier_email
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users u ON mr.supplier_id = u.user_id
+      WHERE mr.tenant_id = ?
+      ORDER BY mr.created_at DESC
+    `, [tenant_id]);
     res.json({ requests });
   } catch (error) {
+    console.error('Maintenance fetch error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -189,9 +264,22 @@ router.post("/messaging/send", authenticateTenant, async (req, res) => {
 router.get("/payments/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
-    const [payments] = await db.execute("SELECT * FROM payments WHERE tenant_id = ?", [tenant_id]);
+    const [payments] = await db.execute(`
+      SELECT 
+        p.*,
+        l.rent_amount,
+        l.due_date as lease_due_date,
+        prop.title as property_title,
+        prop.address as property_address
+      FROM payments p
+      LEFT JOIN leases l ON p.lease_id = l.lease_id
+      LEFT JOIN property prop ON l.property_id = prop.property_id
+      WHERE p.tenant_id = ?
+      ORDER BY p.payment_date DESC
+    `, [tenant_id]);
     res.json({ payments });
   } catch (error) {
+    console.error('Payments fetch error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -200,17 +288,71 @@ router.get("/payments/:id", async (req, res) => {
 router.get("/reminders/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
-    // Rent due reminder
-    const [[lease]] = await db.execute("SELECT * FROM leases WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1", [tenant_id]);
     let reminders = [];
+    
+    // Rent due reminder
+    const [[lease]] = await db.execute(`
+      SELECT l.*, p.title as property_title, p.address as property_address
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? ORDER BY l.start_date DESC LIMIT 1
+    `, [tenant_id]);
+    
     if (lease) {
-      reminders.push({ type: "rent_due", due_date: lease.due_date, amount: lease.rent_amount });
+      // Calculate next rent due date
+      const today = new Date();
+      const dueDate = new Date(today.getFullYear(), today.getMonth(), lease.due_date);
+      if (dueDate < today) {
+        dueDate.setMonth(dueDate.getMonth() + 1);
+      }
+      
+      reminders.push({ 
+        type: "rent_due", 
+        due_date: dueDate.toISOString().split('T')[0], 
+        amount: lease.rent_amount,
+        property_title: lease.property_title,
+        property_address: lease.property_address,
+        priority: "high"
+      });
     }
+    
     // Maintenance reminders
-    const [pending] = await db.execute("SELECT * FROM maintenance_requests WHERE tenant_id = ? AND status != 'completed'", [tenant_id]);
-    if (pending.length > 0) reminders.push({ type: "maintenance_pending", count: pending.length });
+    const [pending] = await db.execute(`
+      SELECT mr.*, p.title as property_title
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      WHERE mr.tenant_id = ? AND mr.status != 'completed'
+      ORDER BY mr.priority DESC, mr.created_at ASC
+    `, [tenant_id]);
+    
+    if (pending.length > 0) {
+      reminders.push({ 
+        type: "maintenance_pending", 
+        count: pending.length,
+        requests: pending.slice(0, 3), // Show first 3 pending requests
+        priority: "medium"
+      });
+    }
+    
+    // Lease expiry reminder
+    if (lease && lease.end_date) {
+      const endDate = new Date(lease.end_date);
+      const daysUntilExpiry = Math.ceil((endDate - today) / (1000 * 60 * 60 * 24));
+      
+      if (daysUntilExpiry <= 30 && daysUntilExpiry > 0) {
+        reminders.push({
+          type: "lease_expiry",
+          days_until_expiry: daysUntilExpiry,
+          expiry_date: lease.end_date,
+          property_title: lease.property_title,
+          priority: daysUntilExpiry <= 7 ? "high" : "medium"
+        });
+      }
+    }
+    
     res.json({ reminders });
   } catch (error) {
+    console.error('Reminders fetch error:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -267,22 +409,57 @@ router.get('/messaging/contacts/:userId', async (req, res) => {
     }
     const [investors] = await db.execute(investorSQL, investorParams);
 
-    // Sort by last message time (most recent first)
-    investors.sort((a, b) => {
+    // Get suppliers who have worked on tenant's property
+    let supplierSQL = `
+      SELECT DISTINCT
+        u.user_id AS id, 
+        CONCAT(u.first_name, ' ', u.last_name) AS name, 
+        'supplier' AS role,
+        u.email,
+        u.profile_image,
+        p.property_id,
+        p.title AS property_name,
+        (SELECT COUNT(*) FROM messages m WHERE 
+          ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
+           (m.sender_id = ? AND m.receiver_id = u.user_id)) AND 
+          m.is_read = 0 AND m.sender_id != ?) AS unread_count,
+        (SELECT m.content FROM messages m WHERE 
+          ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
+           (m.sender_id = ? AND m.receiver_id = u.user_id)) 
+          ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+        (SELECT m.created_at FROM messages m WHERE 
+          ((m.sender_id = u.user_id AND m.receiver_id = ?) OR 
+           (m.sender_id = ? AND m.receiver_id = u.user_id)) 
+          ORDER BY m.created_at DESC LIMIT 1) AS last_message_time
+      FROM users u
+      JOIN maintenance_requests m ON u.user_id = m.supplier_id
+      JOIN leases l ON m.property_id = l.property_id
+      WHERE l.tenant_id = ? AND u.is_active = 1 AND u.role = 'supplier'
+    `;
+    let supplierParams = [userId, userId, userId, userId, userId, userId, userId, userId];
+    if (search) {
+      supplierSQL += ' AND (u.first_name LIKE ? OR u.last_name LIKE ? OR u.email LIKE ?)';
+      supplierParams.push(search, search, search);
+    }
+    const [suppliers] = await db.execute(supplierSQL, supplierParams);
+
+    // Combine and sort all contacts by last message time
+    const allContacts = [...investors, ...suppliers];
+    allContacts.sort((a, b) => {
       if (!a.last_message_time && !b.last_message_time) return 0;
       if (!a.last_message_time) return 1;
-      if (!b.last_message_time) return -1;
+      if (!b.last_message_time) return 0;
       return new Date(b.last_message_time) - new Date(a.last_message_time);
     });
 
-    res.json({ contacts: investors });
+    res.json({ contacts: allContacts });
   } catch (error) {
     console.error('Error fetching investor contacts:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// Send message (tenant to investor)
+// Send message (tenant to investor/supplier)
 router.post("/messaging/send", async (req, res) => {
   try {
     const { sender_id, receiver_id, role, content, message_type = 'text' } = req.body;
@@ -292,9 +469,9 @@ router.post("/messaging/send", async (req, res) => {
     }
 
     const [result] = await db.execute(
-      `INSERT INTO messages (sender_id, receiver_id, role, content, message_type, created_at) 
-       VALUES (?, ?, ?, ?, ?, NOW())`,
-      [sender_id, receiver_id, role, content, message_type]
+      `INSERT INTO messages (sender_id, receiver_id, content, message_type, created_at) 
+       VALUES (?, ?, ?, ?, NOW())`,
+      [sender_id, receiver_id, content, message_type]
     );
 
     // Get the created message with full details
@@ -398,21 +575,27 @@ router.get("/messaging/unread/:userId", async (req, res) => {
 });
 
 // Get tenant's lease information
-router.get("/leases", authenticateTenant, async (req, res) => {
+router.get("/leases/:id", async (req, res) => {
   try {
+    const tenant_id = req.params.id;
     const [leases] = await db.execute(`
       SELECT 
         l.*,
         p.title as property_title,
         p.address as property_address,
+        p.city,
+        p.state,
+        p.zip_code,
         i.first_name as landlord_first_name,
-        i.last_name as landlord_last_name
+        i.last_name as landlord_last_name,
+        i.phone as landlord_phone,
+        i.email as landlord_email
       FROM leases l
       LEFT JOIN property p ON l.property_id = p.property_id
       LEFT JOIN users i ON p.investor_id = i.user_id
       WHERE l.tenant_id = ?
       ORDER BY l.start_date DESC
-    `, [req.user.userId]);
+    `, [tenant_id]);
     
     res.json({ leases });
   } catch (error) {
@@ -446,6 +629,141 @@ router.get("/lease/:id", authenticateTenant, async (req, res) => {
     res.json({ lease });
   } catch (error) {
     console.error('Error fetching lease:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's rent schedules
+router.get("/rent-schedules/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const [schedules] = await db.execute(`
+      SELECT 
+        rs.*,
+        l.rent_amount,
+        l.due_date as lease_due_date,
+        l.late_fee,
+        l.late_fee_percentage,
+        l.grace_period_days
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      WHERE l.tenant_id = ?
+      ORDER BY rs.due_date DESC
+    `, [tenant_id]);
+    
+    res.json({ schedules });
+  } catch (error) {
+    console.error('Error fetching rent schedules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment methods
+router.get("/payment-methods/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const [methods] = await db.execute(`
+      SELECT * FROM tenant_payment_methods 
+      WHERE tenant_id = ? AND is_active = 1
+      ORDER BY is_default DESC
+    `, [tenant_id]);
+    
+    res.json({ methods });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's inventory items
+router.get("/inventory/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get property_id from lease
+    const [[lease]] = await db.execute(`
+      SELECT property_id FROM leases 
+      WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1
+    `, [tenant_id]);
+    
+    if (!lease) {
+      return res.json({ inventory: [] });
+    }
+    
+    const [inventory] = await db.execute(`
+      SELECT 
+        ii.*,
+        CONCAT(u.first_name, ' ', u.last_name) as supplier_name,
+        u.phone as supplier_phone,
+        u.email as supplier_email
+      FROM inventory_items ii
+      LEFT JOIN users u ON ii.supplier_id = u.user_id
+      WHERE ii.property_id = ?
+      ORDER BY ii.created_at DESC
+    `, [lease.property_id]);
+    
+    res.json({ inventory });
+  } catch (error) {
+    console.error('Error fetching inventory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's notifications
+router.get("/notifications/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get recent messages
+    const [messages] = await db.execute(`
+      SELECT 
+        m.*,
+        CONCAT(s.first_name, ' ', s.last_name) as sender_name,
+        s.role as sender_role
+      FROM messages m
+      JOIN users s ON m.sender_id = s.user_id
+      WHERE m.receiver_id = ?
+      ORDER BY m.created_at DESC
+      LIMIT 10
+    `, [tenant_id]);
+    
+    // Get maintenance updates
+    const [maintenanceUpdates] = await db.execute(`
+      SELECT 
+        mr.request_id,
+        mr.status,
+        mr.updated_at,
+        p.title as property_title
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      WHERE mr.tenant_id = ? AND mr.status != 'pending'
+      ORDER BY mr.updated_at DESC
+      LIMIT 5
+    `, [tenant_id]);
+    
+    const notifications = [
+      ...messages.map(m => ({
+        type: 'message',
+        title: `New message from ${m.sender_name}`,
+        content: m.content,
+        timestamp: m.created_at,
+        priority: 'medium'
+      })),
+      ...maintenanceUpdates.map(m => ({
+        type: 'maintenance',
+        title: `Maintenance update for ${m.property_title}`,
+        content: `Status changed to ${m.status}`,
+        timestamp: m.updated_at,
+        priority: 'high'
+      }))
+    ];
+    
+    // Sort by timestamp
+    notifications.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+    
+    res.json({ notifications: notifications.slice(0, 10) });
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
     res.status(500).json({ error: error.message });
   }
 });

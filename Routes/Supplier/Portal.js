@@ -1,3 +1,43 @@
+// Get auto-pay settings for tenants linked to supplier's properties
+router.get("/auto-pay/:supplier_id", authenticateSupplier, async (req, res) => {
+  try {
+    const supplier_id = req.params.supplier_id;
+    // Find all tenants for properties where this supplier has maintenance requests
+    const [rows] = await db.execute(`
+      SELECT 
+        aps.setting_id,
+        aps.tenant_id,
+        aps.lease_id,
+        aps.payment_method_id,
+        aps.is_active,
+        aps.auto_pay_date,
+        aps.created_at,
+        aps.updated_at,
+        tpm.payment_type,
+        tpm.card_last4,
+        tpm.bank_name,
+        tpm.upi_id,
+        u.first_name AS tenant_first_name,
+        u.last_name AS tenant_last_name,
+        p.title AS property_title,
+        l.start_date AS lease_start,
+        l.end_date AS lease_end
+      FROM auto_pay_settings aps
+      JOIN tenant_payment_methods tpm ON aps.payment_method_id = tpm.method_id
+      JOIN users u ON aps.tenant_id = u.user_id
+      JOIN leases l ON aps.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
+      JOIN maintenance_requests mr ON mr.property_id = p.property_id AND mr.supplier_id = ?
+      WHERE aps.is_active = 1
+      GROUP BY aps.setting_id
+      ORDER BY aps.updated_at DESC
+    `, [supplier_id]);
+    res.json({ auto_pay_settings: rows });
+  } catch (error) {
+    console.error("Error fetching auto-pay settings for supplier:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 import express from "express";
 import { db } from "../../db.js";

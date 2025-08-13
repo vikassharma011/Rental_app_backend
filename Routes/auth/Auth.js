@@ -12,6 +12,24 @@ const JWT_SECRET = process.env.JWT_SECRET || 'your-super-secret-jwt-key-for-deve
 
 const router = express.Router();
 
+// ✅ GET PENDING USERS (for admin dashboard)
+router.get("/pending-users", authenticateInvestor, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      "SELECT user_id, email, first_name, last_name, phone, role, status, created_at FROM users WHERE status = 'pending' ORDER BY created_at DESC"
+    );
+    
+    res.status(200).json({ 
+      success: true, 
+      users: rows,
+      count: rows.length 
+    });
+  } catch (error) {
+    console.error("Error fetching pending users:", error);
+    res.status(500).json({ success: false, message: "Internal Server Error" });
+  }
+});
+
 // ✅ SIGNUP
 router.post("/signup", async (req, res) => {
   try {
@@ -61,8 +79,6 @@ router.post("/signup", async (req, res) => {
   }
 });
 
-
-
 // ✅ LOGIN
 router.post("/login", async (req, res) => {
   const { email, password } = req.body;
@@ -87,7 +103,6 @@ router.post("/login", async (req, res) => {
 
   res.status(200).json({ success: true, token });
 });
-
 
 // ✅ APPROVE or REJECT
 router.post("/approve/:userId", authenticateInvestor, async (req, res) => {
