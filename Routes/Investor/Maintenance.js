@@ -4,23 +4,22 @@ import { db } from "../../db.js";
 import jwt from "jsonwebtoken";
 const router = express.Router();
 
-// // Authentication middleware
-// const authenticateUser = (req, res, next) => {
-//   try {
-//     const token = req.headers.authorization?.split(" ")[1];
-//     if (!token) {
-//       return res.status(401).json({ error: "No token provided" });
-//     }
-//     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-//     req.user = decoded;
-//     next();
-//   } catch (error) {
-//     return res.status(401).json({ error: "Invalid token" });
-//   }
-// };
+const authenticateUser = (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (!token) {
+      return res.status(401).json({ error: "No token provided" });
+    }
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = decoded;
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: "Invalid token" });
+  }
+};
 
 // Get all maintenance requests for investor
-router.get("/requests", async (req, res) => {
+router.get("/requests",authenticateUser ,  async (req, res) => {
   try {
     const [rows] = await db.execute(`
       SELECT 
