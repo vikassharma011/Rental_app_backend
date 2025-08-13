@@ -816,6 +816,54 @@ router.get("/supplier/payment-history/:supplier_id", authenticateUser, async (re
   }
 });
 
+// ...existing code...
+// ...existing code...
+
+// Alias for pay supplier (for frontend compatibility)
+router.post("/api/payments/investor/pay-supplier", authenticateUser, async (req, res, next) => {
+  req.url = "/investor/pay-supplier";
+  next();
+}, router);
+
+// ...existing code...
+// Get supplier payments history for investor
+router.get("/investor/supplier-payments", authenticateUser, async (req, res) => {
+  try {
+    // Optionally filter by investor_id
+    const { investor_id } = req.query;
+
+    const [payments] = await db.execute(`
+      SELECT 
+        sp.*,
+        mq.amount as quote_amount,
+        mr.issue_description,
+        p.title as property_title,
+        s.first_name as supplier_first_name,
+        s.last_name as supplier_last_name,
+        s.user_id as supplier_id
+      FROM supplier_payments sp
+      JOIN maintenance_requests mr ON sp.maintenance_request_id = mr.request_id
+      JOIN maintenance_quotes mq ON sp.quote_id = mq.quote_id
+      JOIN property p ON mr.property_id = p.property_id
+      JOIN users s ON mq.supplier_id = s.user_id
+      ${investor_id ? 'WHERE p.investor_id = ?' : ''}
+      ORDER BY sp.payment_date DESC
+    `, investor_id ? [investor_id] : []);
+
+    // Format supplier_name for frontend
+    const formatted = payments.map(p => ({
+      ...p,
+      supplier_name: `${p.supplier_first_name || ''} ${p.supplier_last_name || ''}`.trim()
+    }));
+
+    res.json({ payments: formatted });
+  } catch (error) {
+    console.error("Error fetching supplier payments:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+// ...existing code...
+
 // ==================== PAYMENT METHODS MANAGEMENT ====================
 
 // Get tenant's payment methods
