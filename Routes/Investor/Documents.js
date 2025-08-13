@@ -54,7 +54,7 @@ router.put("/documents/:id", authenticateUser, async (req, res) => {
       UPDATE documents d
       LEFT JOIN property p ON d.property_id = p.property_id
       SET 
-        d.file_name = ?, 
+        d.document_name = ?, 
         d.doc_type = ?, 
         d.property_id = ?, 
         d.visible_to_tenant = ?, 
@@ -62,7 +62,7 @@ router.put("/documents/:id", authenticateUser, async (req, res) => {
       WHERE d.document_id = ? 
       AND (p.investor_id = ? OR d.uploaded_by = ?)
     `, [
-      file_name,
+      document_name,
       doc_type,
       property_id,
       visible_to_tenant ? 1 : 0,
