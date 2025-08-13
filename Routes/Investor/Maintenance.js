@@ -19,7 +19,7 @@ const authenticateUser = (req, res, next) => {
 };
 
 // Get all maintenance requests for investor
-router.get("/requests",authenticateUser ,  async (req, res) => {
+router.get("/requests", authenticateUser, async (req, res) => {
   try {
     const [rows] = await db.execute(`
       SELECT 
@@ -49,12 +49,13 @@ router.get("/requests",authenticateUser ,  async (req, res) => {
   }
 });
 
-// Get completed maintenance requests for supplier payments
+// ...existing code...
 router.get("/completed-requests", async (req, res) => {
   try {
     const [rows] = await db.execute(`
       SELECT 
         mr.*,
+        COALESCE(mr.supplier_id, mq.supplier_id) AS supplier_id,
         u.first_name as tenant_first_name,
         u.last_name as tenant_last_name,
         p.title as property_title,
@@ -67,8 +68,8 @@ router.get("/completed-requests", async (req, res) => {
       FROM maintenance_requests mr
       LEFT JOIN users u ON mr.tenant_id = u.user_id
       LEFT JOIN property p ON mr.property_id = p.property_id
-      LEFT JOIN users sup ON mr.supplier_id = sup.user_id
-      LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id 
+      LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id AND mq.status = 'accepted'
+      LEFT JOIN users sup ON COALESCE(mr.supplier_id, mq.supplier_id) = sup.user_id
       WHERE mr.status = 'completed' AND mq.status = 'accepted'
       ORDER BY mr.updated_at DESC
     `, []);
@@ -79,6 +80,7 @@ router.get("/completed-requests", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// ...existing code...
 
 // Update maintenance request status
 router.put("/requests/:id/status", async (req, res) => {
