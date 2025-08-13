@@ -2,6 +2,8 @@ import express from "express";
 import { db } from "../../db.js";
 import { createPaymentIntent, confirmPayment, createCustomer, createPaymentMethod, attachPaymentMethodToCustomer } from "../../utils/stripe.js";
 import jwt from "jsonwebtoken";
+import Stripe from "stripe";
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const router = express.Router();
 
 // Set default JWT_SECRET for local development
@@ -900,16 +902,12 @@ router.get("/supplier/payment-history/:supplier_id", authenticateUser, async (re
   }
 });
 
-// ...existing code...
-// ...existing code...
-
 // Alias for pay supplier (for frontend compatibility)
 router.post("/api/payments/investor/pay-supplier", authenticateUser, async (req, res, next) => {
   req.url = "/investor/pay-supplier";
   next();
 }, router);
 
-// ...existing code...
 // Get supplier payments history for investor
 router.get("/investor/supplier-payments", authenticateUser, async (req, res) => {
   try {
@@ -946,7 +944,6 @@ router.get("/investor/supplier-payments", authenticateUser, async (req, res) => 
     res.status(500).json({ error: error.message });
   }
 });
-// ...existing code...
 
 // ==================== PAYMENT METHODS MANAGEMENT ====================
 
