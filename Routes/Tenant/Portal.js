@@ -298,9 +298,11 @@ router.get("/reminders/:id", async (req, res) => {
       WHERE l.tenant_id = ? ORDER BY l.start_date DESC LIMIT 1
     `, [tenant_id]);
     
+    // Define today variable at the top level
+    const today = new Date();
+    
     if (lease) {
       // Calculate next rent due date
-      const today = new Date();
       const dueDate = new Date(today.getFullYear(), today.getMonth(), lease.due_date);
       if (dueDate < today) {
         dueDate.setMonth(dueDate.getMonth() + 1);
