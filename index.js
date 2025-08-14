@@ -99,6 +99,9 @@ app.use((req, res, next) => {
 
 app.use(express.json());
 
+// Serve static files for uploaded photos
+app.use('/uploads', express.static('uploads'));
+
 app.use(
   session({
     secret: "your-secret",
