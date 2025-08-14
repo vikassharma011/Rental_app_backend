@@ -28,17 +28,13 @@ router.get("/auto-pay/:tenant_id", async (req, res) => {
 });
 
 // GET tenants
-router.get("/tenant", async (req, res) => {
+router.get("/tenant", authenticateInvestor, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ message: "Authorization token missing or invalid" });
+    const userId = req.user.userId;
+    
+    if (!userId) {
+      return res.status(401).json({ message: "User ID not found in token" });
     }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const userId = decoded.userId;
 
     let baseSQL = `
       SELECT u.user_id, u.first_name, u.last_name, u.email, u.phone,
@@ -116,7 +112,7 @@ router.post("/tenant-requests/:id/:action", async (req, res) => {
 });
 
 // ✅ Add Tenant to Lease
-router.post("/add/tenant", async (req, res) => {
+router.post("/add/tenant", authenticateInvestor, async (req, res) => {
   const { tenant_id, property_id, lease_start, lease_end, rent_amount } = req.body;
 
   try {
@@ -155,7 +151,7 @@ router.post("/add/tenant", async (req, res) => {
 
 
 // ✅ Toggle Tenant Active Status
-router.put("/tenant/:id/status", async (req, res) => {
+router.put("/tenant/:id/status", authenticateInvestor, async (req, res) => {
   const { is_active } = req.body;
   const { id } = req.params;
   await db.execute(`UPDATE users SET is_active = ? WHERE user_id = ?`, [is_active, id]);
@@ -176,7 +172,7 @@ router.get("/properties", authenticateInvestor, async (req, res) => {
 });
 
 // ✅ Get a Single Tenant by ID
-router.get("/tenant/:id", async (req, res) => {
+router.get("/tenant/:id", authenticateInvestor, async (req, res) => {
   try {
     const tenantId = req.params.id;
 
