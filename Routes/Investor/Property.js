@@ -19,9 +19,19 @@ router.post("/add/property", async (req, res) => {
       investor_id,
     } = req.body;
 
+    // Validate required fields
     if (!investor_id) {
       return res.status(400).json({ error: "Missing investor_id" });
     }
+
+    // Ensure all parameters are defined and not undefined
+    const finalTitle = title || '';
+    const finalImage = image || null;
+    const finalAddress = address || '';
+    const finalCity = city || '';
+    const finalState = state || '';
+    const finalZipCode = zip_code || '';
+    const finalDescription = description || '';
 
     const [result] = await db.execute(
       `INSERT INTO property (
@@ -29,14 +39,14 @@ router.post("/add/property", async (req, res) => {
         investor_id, description
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
-        title,
-        image,
-        address,
-        city,
-        state,
-        zip_code,
+        finalTitle,
+        finalImage,
+        finalAddress,
+        finalCity,
+        finalState,
+        finalZipCode,
         investor_id,
-        description,
+        finalDescription,
       ]
     );
 

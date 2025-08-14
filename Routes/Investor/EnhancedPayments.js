@@ -679,274 +679,139 @@ router.post("/investor/collect-rent", authenticateUser, async (req, res) => {
 
 // ==================== SUPPLIER PAYMENT SYSTEM ====================
 
-// Get supplier's completed tasks and pending payments
-router.get("/supplier/pending-payments/:supplier_id", authenticateUser, async (req, res) => {
-  try {
-    const supplier_id = req.params.supplier_id;
-    
-    const [pendingPayments] = await db.execute(`
-      SELECT 
-        mr.request_id, mr.issue_description, mr.status as request_status,
-        mq.quote_id, mq.amount as quote_amount, mq.status as quote_status,
-        p.title as property_title, p.address,
-        u.first_name as tenant_first_name, u.last_name as tenant_last_name,
-        mr.created_at as request_date, mq.created_at as quote_date
-      FROM maintenance_requests mr
-      JOIN maintenance_quotes mq ON mr.request_id = mq.request_id
-      JOIN property p ON mr.property_id = p.property_id
-      JOIN users u ON mr.tenant_id = u.user_id
-      WHERE mq.supplier_id = ? 
-        AND mr.status = 'completed' 
-        AND mq.status = 'accepted'
-        AND mq.payment_status = 'pending'
-      ORDER BY mr.updated_at DESC
-    `, [supplier_id]);
-
-    res.json({ pendingPayments });
-  } catch (error) {
-    console.error("Error getting supplier pending payments:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-router.post("/stripe/create-supplier-payment-intent", async (req, res) => {
-  try {
-    const { supplier_id, maintenance_request_id, quote_id, amount, currency } = req.body;
-
-    if (!supplier_id || !maintenance_request_id || !quote_id || !amount || !currency) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: Math.round(amount * 100), // convert to smallest currency unit
-      currency,
-      metadata: {
-        supplier_id,
-        maintenance_request_id,
-        quote_id
-      }
-    });
-
-    res.json({
-      client_secret: paymentIntent.client_secret,
-      payment_intent_id: paymentIntent.id
-    });
-  } catch (error) {
-    console.error("Stripe PI creation error:", error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
+// Pay supplier for completed maintenance work
 router.post("/investor/pay-supplier", async (req, res) => {
-  const {
-    supplier_id,
-    maintenance_request_id,
-    quote_id,
-    amount,
-    remarks,
-    payment_method,
-    payment_intent_id
-  } = req.body;
-
-  const connection = await db.getConnection(); // mysql2 pool connection
   try {
-    await connection.beginTransaction();
+    const {
+      supplier_id,
+      maintenance_request_id,
+      quote_id,
+      amount,
+      payment_method,
+      payment_intent_id,
+      remarks
+    } = req.body;
 
-    // If Stripe payment, verify status
-    if (payment_method === "stripe_card") {
-      if (!payment_intent_id) {
-        await connection.rollback();
-        return res.status(400).json({ error: "Missing Stripe payment_intent_id" });
-      }
-
-      const paymentIntent = await stripe.paymentIntents.retrieve(payment_intent_id);
-      if (paymentIntent.status !== "succeeded") {
-        await connection.rollback();
-        return res.status(400).json({ error: "Stripe payment not completed" });
-      }
+    // Validate required fields
+    if (!supplier_id || !maintenance_request_id || !quote_id || !amount) {
+      return res.status(400).json({ 
+        error: "Missing required fields: supplier_id, maintenance_request_id, quote_id, amount" 
+      });
     }
 
-    await connection.execute(`
-      INSERT INTO supplier_payments
-        (supplier_id, maintenance_request_id, quote_id, amount, remarks, payment_method, stripe_payment_intent_id, status, created_at)
-      VALUES
-        (?, ?, ?, ?, ?, ?, ?, 'completed', NOW())
+    // Ensure all parameters are defined
+    const finalPaymentMethod = payment_method || 'bank_transfer';
+    const finalRemarks = remarks || '';
+
+    // First, create a supplier payment record
+    const [supplierPaymentResult] = await db.execute(`
+      INSERT INTO supplier_payments (
+        supplier_id, maintenance_request_id, quote_id, amount, 
+        payment_method, status, transaction_id, remarks, 
+        payment_date, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, CURDATE(), NOW(), NOW())
     `, [
       supplier_id,
       maintenance_request_id,
       quote_id,
       amount,
-      remarks,
-      payment_method,
-      payment_intent_id || null
+      finalPaymentMethod,
+      payment_intent_id || null,
+      finalRemarks
     ]);
 
-    await connection.execute(`
-      UPDATE maintenance_requests
-      SET payment_status = 'paid'
-      WHERE request_id = ?
-    `, [maintenance_request_id]);
+    // Update the maintenance quote payment status
+    await db.execute(`
+      UPDATE maintenance_quotes 
+      SET payment_status = 'paid', payment_id = ? 
+      WHERE quote_id = ?
+    `, [supplierPaymentResult.insertId, quote_id]);
 
-    await connection.commit();
-    res.json({ success: true });
-  } catch (error) {
-    await connection.rollback();
-    console.error("Pay supplier error:", error);
-    res.status(500).json({ error: error.message });
-  } finally {
-    connection.release();
-  }
-});
-
-// Process supplier payment (by investor)
-// router.post("/investor/pay-supplier", authenticateUser, async (req, res) => {
-//   try {
-//     const { 
-//       supplier_id, 
-//       maintenance_request_id, 
-//       quote_id, 
-//       amount, 
-//       payment_method,
-//       remarks 
-//     } = req.body;
-
-//     if (!supplier_id || !maintenance_request_id || !quote_id || !amount) {
-//       return res.status(400).json({ error: "Missing required fields" });
-//     }
-
-//     // Verify the quote is accepted and payment is pending
-//     const [[quote]] = await db.execute(`
-//       SELECT mq.*, mr.status as request_status
-//       FROM maintenance_quotes mq
-//       JOIN maintenance_requests mr ON mq.request_id = mr.request_id
-//       WHERE mq.quote_id = ? AND mq.supplier_id = ? 
-//         AND mq.status = 'accepted' AND mq.payment_status = 'pending'
-//         AND mr.status = 'completed'
-//     `, [quote_id, supplier_id]);
-
-//     if (!quote) {
-//       return res.status(400).json({ error: "Invalid quote or request not completed" });
-//     }
-
-//     const transactionId = `SUP_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-
-//     // Insert supplier payment record
-//     const [supplierPaymentResult] = await db.execute(`
-//       INSERT INTO supplier_payments (
-//         supplier_id, maintenance_request_id, quote_id, amount,
-//         payment_method, transaction_id, payment_date, remarks, status
-//       ) VALUES (?, ?, ?, ?, ?, ?, CURDATE(), ?, 'completed')
-//     `, [supplier_id, maintenance_request_id, quote_id, amount, 
-//         payment_method || 'bank_transfer', transactionId, remarks]);
-
-//     const supplierPaymentId = supplierPaymentResult.insertId;
-
-//     // Update quote payment status
-//     await db.execute(`
-//       UPDATE maintenance_quotes 
-//       SET payment_status = 'paid', payment_id = ?
-//       WHERE quote_id = ?
-//     `, [supplierPaymentId, quote_id]);
-
-//     // Also insert into main payments table for consistency
-//     await db.execute(`
-//       INSERT INTO payments (
-//         supplier_id, amount, payment_type, payment_method, 
-//         transaction_id, payment_date, remarks, status
-//       ) VALUES (?, ?, 'supplier', ?, ?, CURDATE(), ?, 'completed')
-//     `, [supplier_id, amount, payment_method || 'bank_transfer', transactionId, remarks]);
-
-//     res.status(201).json({
-//       success: true,
-//       supplier_payment_id: supplierPaymentId,
-//       transaction_id: transactionId,
-//       amount: amount
-//     });
-//   } catch (error) {
-//     console.error("Error processing supplier payment:", error);
-//     res.status(500).json({ error: error.message });
-//   }
-// });
-
-// Get supplier payment history
-router.get("/supplier/payment-history/:supplier_id", authenticateUser, async (req, res) => {
-  try {
-    const supplier_id = req.params.supplier_id;
-    const { page = 1, limit = 10 } = req.query;
-    const offset = (page - 1) * limit;
-
-    const [payments] = await db.execute(`
-      SELECT 
-        sp.*, mr.issue_description, p.title as property_title,
-        u.first_name as tenant_first_name, u.last_name as tenant_last_name
-      FROM supplier_payments sp
-      JOIN maintenance_requests mr ON sp.maintenance_request_id = mr.request_id
-      JOIN property p ON mr.property_id = p.property_id
-      JOIN users u ON mr.tenant_id = u.user_id
-      WHERE sp.supplier_id = ?
-      ORDER BY sp.payment_date DESC 
-      LIMIT ? OFFSET ?
-    `, [supplier_id, parseInt(limit), offset]);
-
-    const [[totalCount]] = await db.execute(`
-      SELECT COUNT(*) as count FROM supplier_payments WHERE supplier_id = ?
-    `, [supplier_id]);
+    // Create a payment record in the main payments table
+    const [mainPaymentResult] = await db.execute(`
+      INSERT INTO payments (
+        supplier_id, amount, payment_type, payment_method, 
+        transaction_id, status, payment_date, remarks, 
+        created_at, updated_at
+      ) VALUES (?, ?, 'supplier', ?, ?, 'completed', CURDATE(), ?, NOW(), NOW())
+    `, [
+      supplier_id,
+      amount,
+      finalPaymentMethod,
+      payment_intent_id || null,
+      finalRemarks
+    ]);
 
     res.json({
-      payments,
-      pagination: {
-        current_page: parseInt(page),
-        total_pages: Math.ceil(totalCount.count / limit),
-        total_records: totalCount.count,
-        has_next: offset + payments.length < totalCount.count
-      }
+      success: true,
+      transaction_id: payment_intent_id || mainPaymentResult.insertId,
+      supplier_payment_id: supplierPaymentResult.insertId,
+      payment_id: mainPaymentResult.insertId,
+      message: "Supplier payment processed successfully"
     });
+
   } catch (error) {
-    console.error("Error getting supplier payment history:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Error processing supplier payment:", error);
+    res.status(500).json({ error: "Failed to process supplier payment" });
   }
 });
 
-// Alias for pay supplier (for frontend compatibility)
-router.post("/api/payments/investor/pay-supplier", authenticateUser, async (req, res, next) => {
-  req.url = "/investor/pay-supplier";
-  next();
-}, router);
-
-// Get supplier payments history for investor
-router.get("/investor/supplier-payments", authenticateUser, async (req, res) => {
+// Get supplier payment history for investor
+router.get("/investor/supplier-payments", async (req, res) => {
   try {
-    // Optionally filter by investor_id
-    const { investor_id } = req.query;
-
     const [payments] = await db.execute(`
       SELECT 
         sp.*,
-        mq.amount as quote_amount,
         mr.issue_description,
+        mr.property_id,
         p.title as property_title,
-        s.first_name as supplier_first_name,
-        s.last_name as supplier_last_name,
-        s.user_id as supplier_id
+        u.first_name as supplier_first_name,
+        u.last_name as supplier_last_name,
+        mq.amount as quote_amount
       FROM supplier_payments sp
       JOIN maintenance_requests mr ON sp.maintenance_request_id = mr.request_id
-      JOIN maintenance_quotes mq ON sp.quote_id = mq.quote_id
       JOIN property p ON mr.property_id = p.property_id
-      JOIN users s ON mq.supplier_id = s.user_id
-      ${investor_id ? 'WHERE p.investor_id = ?' : ''}
-      ORDER BY sp.payment_date DESC
-    `, investor_id ? [investor_id] : []);
+      JOIN users u ON sp.supplier_id = u.user_id
+      JOIN maintenance_quotes mq ON sp.quote_id = mq.quote_id
+      ORDER BY sp.created_at DESC
+    `);
 
-    // Format supplier_name for frontend
-    const formatted = payments.map(p => ({
-      ...p,
-      supplier_name: `${p.supplier_first_name || ''} ${p.supplier_last_name || ''}`.trim()
-    }));
-
-    res.json({ payments: formatted });
+    res.json({ payments });
   } catch (error) {
     console.error("Error fetching supplier payments:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: "Failed to fetch supplier payments" });
+  }
+});
+
+// Get supplier payment summary for investor
+router.get("/investor/payment-summary", async (req, res) => {
+  try {
+    const [supplierPayments] = await db.execute(`
+      SELECT 
+        COUNT(*) as total_payments,
+        SUM(amount) as total_amount,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_payments,
+        SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END) as completed_amount
+      FROM supplier_payments
+    `);
+
+    const [rentPayments] = await db.execute(`
+      SELECT 
+        COUNT(*) as total_rent_payments,
+        SUM(amount) as total_rent_amount,
+        COUNT(CASE WHEN status = 'completed' THEN 1 END) as completed_rent_payments,
+        SUM(CASE WHEN status = 'completed' THEN amount ELSE 0 END) as completed_rent_amount
+      FROM payments
+      WHERE payment_type = 'rent'
+    `);
+
+    res.json({
+      supplier_payments: supplierPayments[0] || {},
+      rent_payments: rentPayments[0] || {}
+    });
+  } catch (error) {
+    console.error("Error fetching payment summary:", error);
+    res.status(500).json({ error: "Failed to fetch payment summary" });
   }
 });
 

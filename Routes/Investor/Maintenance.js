@@ -28,16 +28,18 @@ router.get("/requests", authenticateUser, async (req, res) => {
         u.last_name as tenant_last_name,
         p.title as property_title,
         p.address as property_address,
+        COALESCE(mr.supplier_id, mq.supplier_id) AS supplier_id,
         sup.first_name as supplier_first_name,
         sup.last_name as supplier_last_name,
         mq.amount as quote_amount,
         mq.status as quote_status,
-        mq.payment_status
+        mq.payment_status,
+        mq.quote_id
       FROM maintenance_requests mr
       LEFT JOIN users u ON mr.tenant_id = u.user_id
       LEFT JOIN property p ON mr.property_id = p.property_id
-      LEFT JOIN users sup ON mr.supplier_id = sup.user_id
       LEFT JOIN maintenance_quotes mq ON mr.request_id = mq.request_id AND mq.status = 'accepted'
+      LEFT JOIN users sup ON COALESCE(mr.supplier_id, mq.supplier_id) = sup.user_id
       WHERE p.investor_id = ?
       ORDER BY mr.created_at DESC
     `, [req.user.userId]);
@@ -80,18 +82,20 @@ router.get("/completed-requests", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-// ...existing code...
 
 // Update maintenance request status
 router.put("/requests/:id/status", async (req, res) => {
   try {
     const { status, supplier_id } = req.body;
     
+    // Ensure supplier_id is not undefined
+    const finalSupplierId = supplier_id !== undefined ? supplier_id : null;
+    
     await db.execute(`
       UPDATE maintenance_requests 
       SET status = ?, supplier_id = ?, updated_at = NOW() 
       WHERE request_id = ?
-    `, [status, supplier_id || null, req.params.id]);
+    `, [status, finalSupplierId, req.params.id]);
     
     res.json({ success: true });
   } catch (err) {
@@ -293,12 +297,23 @@ router.get("/requests", async (req, res) => {
 router.post("/requests", async (req, res) => {
   try {
     const { property_id, tenant_id, issue_description, photo_url, priority } = req.body;
+    
+    // Validate required fields
+    if (!property_id || !tenant_id || !issue_description) {
+      return res.status(400).json({ error: "Missing required fields: property_id, tenant_id, issue_description" });
+    }
+    
+    // Ensure all parameters are defined
+    const finalPhotoUrl = photo_url || null;
+    const finalPriority = priority || 'medium';
+    
     const [result] = await db.execute(
       "INSERT INTO maintenance_requests (property_id, tenant_id, issue_description, photo_url, status, priority, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', ?, NOW(), NOW())",
-      [property_id, tenant_id, issue_description, photo_url, priority]
+      [property_id, tenant_id, issue_description, finalPhotoUrl, finalPriority]
     );
     res.json({ request_id: result.insertId });
   } catch (err) {
+    console.error("Error creating maintenance request:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -307,12 +322,19 @@ router.post("/requests", async (req, res) => {
 router.put("/requests/:id/assign", async (req, res) => {
   try {
     const { supplier_id } = req.body;
+    
+    // Ensure supplier_id is not undefined
+    if (supplier_id === undefined) {
+      return res.status(400).json({ error: "supplier_id is required" });
+    }
+    
     await db.execute(
       "UPDATE maintenance_requests SET supplier_id = ?, status = 'assigned', updated_at = NOW() WHERE request_id = ?",
       [supplier_id, req.params.id]
     );
     res.json({ success: true });
   } catch (err) {
+    console.error("Error assigning supplier:", err);
     res.status(500).json({ error: err.message });
   }
 });
