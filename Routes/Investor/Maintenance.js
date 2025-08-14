@@ -100,6 +100,89 @@ router.put("/requests/:id/status", async (req, res) => {
   }
 });
 
+// Get quotes for a maintenance request
+router.get("/requests/:requestId/quotes", async (req, res) => {
+  try {
+    const requestId = req.params.requestId;
+    const [quotes] = await db.execute(`
+      SELECT 
+        mq.*,
+        u.first_name,
+        u.last_name,
+        u.email
+      FROM maintenance_quotes mq
+      JOIN users u ON mq.supplier_id = u.user_id
+      WHERE mq.request_id = ?
+      ORDER BY mq.created_at DESC
+    `, [requestId]);
+    
+    res.json({ quotes });
+  } catch (err) {
+    console.error("Error fetching quotes:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Assign supplier to maintenance request
+router.post("/requests/:requestId/assign-supplier", async (req, res) => {
+  try {
+    const { supplier_id } = req.body;
+    const requestId = req.params.requestId;
+    
+    await db.execute(`
+      UPDATE maintenance_requests 
+      SET supplier_id = ?, status = 'assigned', updated_at = NOW() 
+      WHERE request_id = ?
+    `, [supplier_id, requestId]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error assigning supplier:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Set quote amount for maintenance request
+router.post("/requests/:requestId/set-quote", async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const requestId = req.params.requestId;
+    
+    await db.execute(`
+      UPDATE maintenance_requests 
+      SET quote_amount = ?, updated_at = NOW() 
+      WHERE request_id = ?
+    `, [amount, requestId]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error setting quote amount:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Approve a quote
+router.post("/quotes/:quoteId/approve", async (req, res) => {
+  try {
+    const quoteId = req.params.quoteId;
+    
+    // Get quote details
+    const [[quote]] = await db.execute("SELECT * FROM maintenance_quotes WHERE quote_id = ?", [quoteId]);
+    if (!quote) return res.status(404).json({ error: "Quote not found" });
+    
+    // Mark quote as accepted, others as rejected
+    await db.execute("UPDATE maintenance_quotes SET status = 'accepted' WHERE quote_id = ?", [quoteId]);
+    await db.execute("UPDATE maintenance_quotes SET status = 'rejected' WHERE request_id = ? AND quote_id != ?", [quote.request_id, quoteId]);
+    
+    // Assign supplier to request
+    await db.execute("UPDATE maintenance_requests SET supplier_id = ?, status = 'assigned' WHERE request_id = ?", [quote.supplier_id, quote.request_id]);
+    
+    res.json({ success: true });
+  } catch (err) {
+    console.error("Error approving quote:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Delete a maintenance request
 router.delete("/requests/:id", async (req, res) => {

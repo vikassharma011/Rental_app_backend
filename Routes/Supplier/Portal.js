@@ -99,9 +99,112 @@ router.get('/contacts/:userId', authenticateSupplier, async (req, res) => {
     }
     const [tenants] = await db.execute(tenantSQL, tenantParams);
 
-    const contacts = [...investors, ...tenants];
-    res.json({ contacts });
+    res.json({ contacts: [...investors, ...tenants] });
   } catch (error) {
+    console.error('Error fetching contacts:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get available maintenance requests for suppliers
+router.get('/maintenance-requests', authenticateSupplier, async (req, res) => {
+  try {
+    const [requests] = await db.execute(`
+      SELECT 
+        mr.*,
+        u.first_name as tenant_first_name,
+        u.last_name as tenant_last_name,
+        p.title as property_title,
+        p.address as property_address
+      FROM maintenance_requests mr
+      LEFT JOIN users u ON mr.tenant_id = u.user_id
+      LEFT JOIN property p ON mr.property_id = p.property_id
+      WHERE mr.status = 'pending' AND mr.supplier_id IS NULL
+      ORDER BY mr.created_at DESC
+    `);
+    
+    res.json({ requests });
+  } catch (error) {
+    console.error('Error fetching maintenance requests:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Submit quote for maintenance request
+router.post('/submit-quote', authenticateSupplier, async (req, res) => {
+  try {
+    const { request_id, supplier_id, amount, description } = req.body;
+    
+    if (!request_id || !supplier_id || !amount) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Check if supplier already submitted a quote for this request
+    const [existingQuote] = await db.execute(
+      'SELECT * FROM maintenance_quotes WHERE request_id = ? AND supplier_id = ?',
+      [request_id, supplier_id]
+    );
+
+    if (existingQuote.length > 0) {
+      return res.status(400).json({ error: 'You have already submitted a quote for this request' });
+    }
+
+    await db.execute(
+      'INSERT INTO maintenance_quotes (request_id, supplier_id, amount, description, status) VALUES (?, ?, ?, ?, ?)',
+      [request_id, supplier_id, amount, description, 'pending']
+    );
+
+    res.json({ success: true, message: 'Quote submitted successfully' });
+  } catch (error) {
+    console.error('Error submitting quote:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update task status
+router.put('/tasks/:taskId/status', authenticateSupplier, async (req, res) => {
+  try {
+    const { taskId } = req.params;
+    const { status, progress_update, time_spent } = req.body;
+    
+    await db.execute(
+      'UPDATE maintenance_requests SET status = ?, updated_at = NOW() WHERE request_id = ?',
+      [status, taskId]
+    );
+
+    // Add progress update to maintenance_updates table if it exists
+    if (progress_update) {
+      await db.execute(
+        'INSERT INTO maintenance_updates (request_id, supplier_id, update_text, time_spent, created_at) VALUES (?, ?, ?, ?, NOW())',
+        [taskId, req.user.userId, progress_update, time_spent || null]
+      );
+    }
+
+    res.json({ success: true, message: 'Task status updated successfully' });
+  } catch (error) {
+    console.error('Error updating task status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create inventory request
+router.post('/inventory-request', authenticateSupplier, async (req, res) => {
+  try {
+    const { item_name, property_id, item_type, purchase_date, warranty_end_date } = req.body;
+    const supplier_id = req.user.userId;
+    
+    if (!item_name || !property_id) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    await db.execute(
+      'INSERT INTO inventory_requests (item_name, supplier_id, property_id, item_type, purchase_date, warranty_end_date, status) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [item_name, supplier_id, property_id, item_type, purchase_date, warranty_end_date, 'pending']
+    );
+
+    res.json({ success: true, message: 'Inventory request submitted successfully' });
+  } catch (error) {
+    console.error('Error creating inventory request:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -153,7 +256,27 @@ router.get("/profile/:id", async (req, res) => {
   try {
     const supplier_id = req.params.id;
     const [[profile]] = await db.execute("SELECT * FROM users WHERE user_id = ? AND role = 'supplier'", [supplier_id]);
-    res.json({ profile });
+    
+    // Get bank accounts
+    const [bankAccounts] = await db.execute(
+      "SELECT * FROM supplier_bank_accounts WHERE supplier_id = ? AND is_active = 1 ORDER BY is_default DESC, created_at DESC",
+      [supplier_id]
+    );
+    
+    // Get additional stats
+    const [tasks] = await db.execute("SELECT COUNT(*) as total_tasks FROM maintenance_requests WHERE supplier_id = ?", [supplier_id]);
+    const [completedTasks] = await db.execute("SELECT COUNT(*) as completed_tasks FROM maintenance_requests WHERE supplier_id = ? AND status = 'completed'", [supplier_id]);
+    const [earnings] = await db.execute("SELECT SUM(amount) as total_earnings FROM payments WHERE supplier_id = ? AND status = 'completed'", [supplier_id]);
+    
+    res.json({ 
+      profile: {
+        ...profile,
+        total_tasks: tasks[0]?.total_tasks || 0,
+        completed_tasks: completedTasks[0]?.completed_tasks || 0,
+        total_earnings: earnings[0]?.total_earnings || 0
+      },
+      bank_accounts: bankAccounts
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -532,6 +655,102 @@ router.post("/quote", authenticateSupplier, async (req, res) => {
   } catch (error) {
     console.error('Error submitting quote:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Get supplier bank accounts
+router.get("/bank-accounts/:supplierId", authenticateSupplier, async (req, res) => {
+  try {
+    const { supplierId } = req.params;
+    
+    const [accounts] = await db.execute(
+      "SELECT * FROM supplier_bank_accounts WHERE supplier_id = ? AND is_active = 1 ORDER BY is_default DESC, created_at DESC",
+      [supplierId]
+    );
+    
+    res.json({ bank_accounts: accounts });
+  } catch (error) {
+    console.error("Error fetching bank accounts:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Add new bank account
+router.post("/bank-accounts/:supplierId", authenticateSupplier, async (req, res) => {
+  try {
+    const { supplierId } = req.params;
+    const { bank_name, account_number, ifsc_code, account_holder_name, is_default } = req.body;
+    
+    // Validate required fields
+    if (!bank_name || !account_number || !ifsc_code || !account_holder_name) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+    
+    // If this is set as default, unset other defaults
+    if (is_default) {
+      await db.execute(
+        "UPDATE supplier_bank_accounts SET is_default = 0 WHERE supplier_id = ?",
+        [supplierId]
+      );
+    }
+    
+    // Insert new bank account
+    const [result] = await db.execute(
+      "INSERT INTO supplier_bank_accounts (supplier_id, bank_name, account_number, ifsc_code, account_holder_name, is_default) VALUES (?, ?, ?, ?, ?, ?)",
+      [supplierId, bank_name, account_number, ifsc_code, account_holder_name, is_default ? 1 : 0]
+    );
+    
+    res.json({ 
+      message: "Bank account added successfully",
+      account_id: result.insertId
+    });
+  } catch (error) {
+    console.error("Error adding bank account:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Update bank account
+router.put("/bank-accounts/:supplierId/:accountId", authenticateSupplier, async (req, res) => {
+  try {
+    const { supplierId, accountId } = req.params;
+    const { bank_name, account_number, ifsc_code, account_holder_name, is_default } = req.body;
+    
+    // If this is set as default, unset other defaults
+    if (is_default) {
+      await db.execute(
+        "UPDATE supplier_bank_accounts SET is_default = 0 WHERE supplier_id = ? AND account_id != ?",
+        [supplierId, accountId]
+      );
+    }
+    
+    // Update bank account
+    await db.execute(
+      "UPDATE supplier_bank_accounts SET bank_name = ?, account_number = ?, ifsc_code = ?, account_holder_name = ?, is_default = ? WHERE account_id = ? AND supplier_id = ?",
+      [bank_name, account_number, ifsc_code, account_holder_name, is_default ? 1 : 0, accountId, supplierId]
+    );
+    
+    res.json({ message: "Bank account updated successfully" });
+  } catch (error) {
+    console.error("Error updating bank account:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Delete bank account
+router.delete("/bank-accounts/:supplierId/:accountId", authenticateSupplier, async (req, res) => {
+  try {
+    const { supplierId, accountId } = req.params;
+    
+    await db.execute(
+      "UPDATE supplier_bank_accounts SET is_active = 0 WHERE account_id = ? AND supplier_id = ?",
+      [accountId, supplierId]
+    );
+    
+    res.json({ message: "Bank account deleted successfully" });
+  } catch (error) {
+    console.error("Error deleting bank account:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 

@@ -1,7 +1,35 @@
 import express from "express";
 import { db } from "../../db.js";
+import multer from "multer";
+import path from "path";
 
 const router = express.Router();
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/profile-pictures/');
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'profile-' + req.params.id + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    // Accept only image files
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
 
 // Get investor profile with comprehensive data
 router.get("/profile/:id", async (req, res) => {
@@ -10,7 +38,7 @@ router.get("/profile/:id", async (req, res) => {
     
     // Get basic user info
     const [[user]] = await db.execute(
-      "SELECT user_id, first_name, last_name, email, phone, role, status, created_at FROM users WHERE user_id = ? AND role = 'investor'",
+      "SELECT user_id, first_name, last_name, email, phone, role, status, profile_picture_url, created_at FROM users WHERE user_id = ? AND role = 'investor'",
       [id]
     );
 
@@ -120,7 +148,7 @@ router.get("/profile/:id", async (req, res) => {
         ...user,
         name: `${user.first_name} ${user.last_name}`,
         joined_date: user.created_at,
-        profilePic: `https://api.dicebear.com/7.x/thumbs/svg?seed=${user.user_id}`
+        profilePic: user.profile_picture_url || `https://api.dicebear.com/7.x/thumbs/svg?seed=${user.user_id}`
       },
       properties,
       leases,
@@ -309,6 +337,34 @@ router.get("/activity/:id", async (req, res) => {
     res.json({ activities });
   } catch (error) {
     console.error("Error fetching activity log:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Upload profile picture
+router.post("/profile/:id/upload-picture", upload.single('profile_picture'), async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Generate the file URL (in production, this would be a CDN URL)
+    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/profile-pictures/${req.file.filename}`;
+    
+    // Update user profile with the new picture URL
+    await db.execute(
+      "UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'investor'",
+      [fileUrl, id]
+    );
+
+    res.json({ 
+      message: "Profile picture uploaded successfully",
+      profile_picture_url: fileUrl
+    });
+  } catch (error) {
+    console.error("Error uploading profile picture:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });

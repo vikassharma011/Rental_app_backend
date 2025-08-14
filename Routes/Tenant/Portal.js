@@ -2,7 +2,36 @@
 import express from "express";
 import { db } from "../../db.js";
 import jwt from "jsonwebtoken";
+import multer from "multer";
+import path from "path";
+
 const router = express.Router();
+
+// Configure multer for file uploads
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, 'uploads/maintenance-photos/');
+  },
+  filename: function (req, file, cb) {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.round(Math.random() * 1E9));
+    cb(null, 'maintenance-' + req.params.tenantId + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ 
+  storage: storage,
+  limits: {
+    fileSize: 5 * 1024 * 1024 // 5MB limit
+  },
+  fileFilter: function (req, file, cb) {
+    // Accept only image files
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'), false);
+    }
+  }
+});
 
 // Simple authentication middleware for tenant
 function authenticateTenant(req, res, next) {
@@ -767,6 +796,28 @@ router.get("/notifications/:id", async (req, res) => {
   } catch (error) {
     console.error('Error fetching notifications:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Upload maintenance photo
+router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async (req, res) => {
+  try {
+    const { tenantId } = req.params;
+    
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
+
+    // Generate the file URL (in production, this would be a CDN URL)
+    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/maintenance-photos/${req.file.filename}`;
+    
+    res.json({ 
+      message: "Photo uploaded successfully",
+      photo_url: fileUrl
+    });
+  } catch (error) {
+    console.error("Error uploading maintenance photo:", error);
+    res.status(500).json({ error: "Internal server error" });
   }
 });
 
