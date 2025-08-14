@@ -4,13 +4,20 @@ import { db } from "../../db.js";
 import jwt from "jsonwebtoken";
 import multer from "multer";
 import path from "path";
+import fs from "fs";
 
 const router = express.Router();
+
+// Ensure uploads directory exists
+const uploadsDir = 'uploads/maintenance-photos/';
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, 'uploads/maintenance-photos/');
+    cb(null, uploadsDir);
   },
   filename: function (req, file, cb) {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.round(Math.random() * 1E9));
@@ -819,6 +826,20 @@ router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async
     console.error("Error uploading maintenance photo:", error);
     res.status(500).json({ error: "Internal server error" });
   }
+});
+
+// Error handling middleware for multer
+router.use((error, req, res, next) => {
+  if (error instanceof multer.MulterError) {
+    if (error.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
+    }
+    return res.status(400).json({ error: error.message });
+  }
+  if (error) {
+    return res.status(400).json({ error: error.message });
+  }
+  next();
 });
 
 export { router as TenantPortalRouter };
