@@ -174,6 +174,19 @@ router.put('/tasks/:taskId/status', authenticateSupplier, async (req, res) => {
 
     // Add progress update to maintenance_updates table if it exists
     if (progress_update) {
+      // Ensure maintenance_updates table exists (guard for missing table)
+      await db.execute(`
+        CREATE TABLE IF NOT EXISTS maintenance_updates (
+          update_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+          request_id BIGINT UNSIGNED NOT NULL,
+          supplier_id BIGINT UNSIGNED NOT NULL,
+          update_text TEXT,
+          time_spent INT NULL,
+          created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+          PRIMARY KEY (update_id),
+          INDEX idx_request_id (request_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+      `);
       await db.execute(
         'INSERT INTO maintenance_updates (request_id, supplier_id, update_text, time_spent, created_at) VALUES (?, ?, ?, ?, NOW())',
         [taskId, req.user.userId, progress_update, time_spent || null]

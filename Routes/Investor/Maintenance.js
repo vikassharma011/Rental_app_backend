@@ -51,6 +51,38 @@ router.get("/requests", authenticateUser, async (req, res) => {
   }
 });
 
+// Get maintenance progress updates for a request (from suppliers)
+router.get("/requests/:requestId/updates", authenticateUser, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    // Ensure table exists in case migration not applied yet
+    await db.execute(`
+      CREATE TABLE IF NOT EXISTS maintenance_updates (
+        update_id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        request_id BIGINT UNSIGNED NOT NULL,
+        supplier_id BIGINT UNSIGNED NOT NULL,
+        update_text TEXT,
+        time_spent INT NULL,
+        created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (update_id),
+        INDEX idx_request_id (request_id)
+      ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    `);
+    const [rows] = await db.execute(
+      `SELECT mu.*, CONCAT(u.first_name,' ',u.last_name) AS supplier_name
+       FROM maintenance_updates mu
+       LEFT JOIN users u ON mu.supplier_id = u.user_id
+       WHERE mu.request_id = ?
+       ORDER BY mu.created_at DESC`,
+      [requestId]
+    );
+    res.json({ updates: rows });
+  } catch (err) {
+    console.error("Error fetching maintenance updates:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ...existing code...
 router.get("/completed-requests", async (req, res) => {
   try {
