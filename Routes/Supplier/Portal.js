@@ -133,9 +133,9 @@ router.get('/maintenance-requests', authenticateSupplier, async (req, res) => {
 // Submit quote for maintenance request
 router.post('/submit-quote', authenticateSupplier, async (req, res) => {
   try {
-    const { request_id, supplier_id, amount, description } = req.body;
-    
-    if (!request_id || !supplier_id || !amount) {
+    const { request_id, amount, description } = req.body;
+    const supplier_id = req.user.userId;
+    if (!request_id || !amount) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
@@ -337,16 +337,7 @@ router.post("/profile/:id/upload-picture", async (req, res) => {
   }
 });
 
-// Tasks (assigned)
-router.get("/tasks/:id", async (req, res) => {
-  try {
-    const supplier_id = req.params.id;
-    const [tasks] = await db.execute("SELECT * FROM maintenance_requests WHERE supplier_id = ?", [supplier_id]);
-    res.json({ tasks });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
+// (removed duplicate unprotected /tasks/:id route)
 
 // Work history (completed tasks)
 router.get("/work-history/:id", async (req, res) => {
@@ -370,13 +361,24 @@ router.get("/inventory/:id", async (req, res) => {
   }
 });
 
-// Earnings/payments
-router.get("/earnings/:id", async (req, res) => {
+// (removed duplicate simple earnings route; richer route below is used)
+
+// Get supplier inventory requests
+router.get('/inventory-requests/:id', authenticateSupplier, async (req, res) => {
   try {
     const supplier_id = req.params.id;
-    const [payments] = await db.execute("SELECT * FROM payments WHERE supplier_id = ? AND status = 'completed'", [supplier_id]);
-    res.json({ payments });
+    const [requests] = await db.execute(
+      `SELECT ir.*,
+              p.title as property_title
+       FROM inventory_requests ir
+       LEFT JOIN property p ON ir.property_id = p.property_id
+       WHERE ir.supplier_id = ?
+       ORDER BY ir.created_at DESC`,
+      [supplier_id]
+    );
+    res.json({ requests });
   } catch (error) {
+    console.error('Error fetching inventory requests:', error);
     res.status(500).json({ error: error.message });
   }
 });
