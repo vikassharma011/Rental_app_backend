@@ -430,14 +430,141 @@ router.get("/notifications/:id", async (req, res) => {
   }
 });
 
-// Settings update
-router.put("/settings/:id", async (req, res) => {
+// Helper to ensure supplier_settings table exists
+async function ensureSupplierSettingsTable() {
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS supplier_settings (
+      supplier_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+      email_notifications TINYINT(1) DEFAULT 1,
+      sms_notifications TINYINT(1) DEFAULT 0,
+      push_notifications TINYINT(1) DEFAULT 1,
+      auto_accept_tasks TINYINT(1) DEFAULT 0,
+      availability VARCHAR(20) DEFAULT 'Online',
+      business_start_time VARCHAR(5) DEFAULT '09:00',
+      business_end_time VARCHAR(5) DEFAULT '18:00',
+      max_tasks_per_day INT DEFAULT 5,
+      preferred_language VARCHAR(32) DEFAULT 'English',
+      theme VARCHAR(16) DEFAULT 'Light',
+      created_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8;
+  `);
+}
+
+// Get supplier settings
+router.get("/settings/:id", authenticateSupplier, async (req, res) => {
   try {
     const supplier_id = req.params.id;
-    const { is_active } = req.body;
-    await db.execute("UPDATE users SET is_active = ? WHERE user_id = ? AND role = 'supplier'", [is_active, supplier_id]);
+    await ensureSupplierSettingsTable();
+    const [rows] = await db.execute(
+      `SELECT * FROM supplier_settings WHERE supplier_id = ?`,
+      [supplier_id]
+    );
+    let settings;
+    if (!rows || rows.length === 0) {
+      // Initialize with defaults
+      await db.execute(
+        `INSERT INTO supplier_settings (supplier_id) VALUES (?)`,
+        [supplier_id]
+      );
+      settings = {
+        emailNotifications: 1,
+        smsNotifications: 0,
+        pushNotifications: 1,
+        autoAcceptTasks: 0,
+        availability: 'Online',
+        businessHours: { start: '09:00', end: '18:00' },
+        maxTasksPerDay: 5,
+        preferredLanguage: 'English',
+        theme: 'Light'
+      };
+    } else {
+      const row = rows[0];
+      settings = {
+        emailNotifications: !!row.email_notifications,
+        smsNotifications: !!row.sms_notifications,
+        pushNotifications: !!row.push_notifications,
+        autoAcceptTasks: !!row.auto_accept_tasks,
+        availability: row.availability || 'Online',
+        businessHours: {
+          start: row.business_start_time || '09:00',
+          end: row.business_end_time || '18:00'
+        },
+        maxTasksPerDay: row.max_tasks_per_day ?? 5,
+        preferredLanguage: row.preferred_language || 'English',
+        theme: row.theme || 'Light'
+      };
+    }
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error fetching supplier settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update supplier settings (and availability)
+router.put("/settings/:id", authenticateSupplier, async (req, res) => {
+  try {
+    const supplier_id = req.params.id;
+    await ensureSupplierSettingsTable();
+
+    const {
+      emailNotifications,
+      smsNotifications,
+      pushNotifications,
+      autoAcceptTasks,
+      availability,
+      businessHours,
+      maxTasksPerDay,
+      preferredLanguage,
+      theme,
+      is_active
+    } = req.body || {};
+
+    // Upsert settings row
+    const [existing] = await db.execute(
+      `SELECT supplier_id FROM supplier_settings WHERE supplier_id = ?`,
+      [supplier_id]
+    );
+    const hasRow = existing && existing.length > 0;
+
+    // Build update parts dynamically
+    const updates = [];
+    const params = [];
+
+    if (emailNotifications !== undefined) { updates.push('email_notifications = ?'); params.push(emailNotifications ? 1 : 0); }
+    if (smsNotifications !== undefined) { updates.push('sms_notifications = ?'); params.push(smsNotifications ? 1 : 0); }
+    if (pushNotifications !== undefined) { updates.push('push_notifications = ?'); params.push(pushNotifications ? 1 : 0); }
+    if (autoAcceptTasks !== undefined) { updates.push('auto_accept_tasks = ?'); params.push(autoAcceptTasks ? 1 : 0); }
+    if (availability !== undefined) { updates.push('availability = ?'); params.push(availability); }
+    if (businessHours && (businessHours.start || businessHours.end)) {
+      if (businessHours.start !== undefined) { updates.push('business_start_time = ?'); params.push(businessHours.start); }
+      if (businessHours.end !== undefined) { updates.push('business_end_time = ?'); params.push(businessHours.end); }
+    }
+    if (maxTasksPerDay !== undefined) { updates.push('max_tasks_per_day = ?'); params.push(parseInt(maxTasksPerDay)); }
+    if (preferredLanguage !== undefined) { updates.push('preferred_language = ?'); params.push(preferredLanguage); }
+    if (theme !== undefined) { updates.push('theme = ?'); params.push(theme); }
+
+    if (!hasRow) {
+      await db.execute(`INSERT INTO supplier_settings (supplier_id) VALUES (?)`, [supplier_id]);
+    }
+    if (updates.length > 0) {
+      const sql = `UPDATE supplier_settings SET ${updates.join(', ')}, updated_at = CURRENT_TIMESTAMP WHERE supplier_id = ?`;
+      params.push(supplier_id);
+      await db.execute(sql, params);
+    }
+
+    // Optionally reflect availability to users.is_active
+    if (is_active !== undefined) {
+      await db.execute(`UPDATE users SET is_active = ? WHERE user_id = ? AND role = 'supplier'`, [is_active ? 1 : 0, supplier_id]);
+    } else if (availability !== undefined) {
+      const active = availability === 'Online' ? 1 : 0;
+      await db.execute(`UPDATE users SET is_active = ? WHERE user_id = ? AND role = 'supplier'`, [active, supplier_id]);
+    }
+
     res.json({ success: true });
   } catch (error) {
+    console.error('Error updating supplier settings:', error);
     res.status(500).json({ error: error.message });
   }
 });
