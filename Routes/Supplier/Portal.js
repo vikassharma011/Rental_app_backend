@@ -396,6 +396,26 @@ router.get('/inventory-requests/:id', authenticateSupplier, async (req, res) => 
   }
 });
 
+// Update inventory request status
+router.put('/inventory-requests/:requestId/status', authenticateSupplier, async (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { status } = req.body;
+    const allowed = ['pending', 'approved', 'in_transit', 'provided', 'delayed', 'rejected'];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({ error: 'Invalid status' });
+    }
+    await db.execute(
+      `UPDATE inventory_requests SET status = ?, updated_at = NOW() WHERE request_id = ?`,
+      [status, requestId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error updating inventory request status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Notifications (assigned tasks, payment status)
 router.get("/notifications/:id", async (req, res) => {
   try {
