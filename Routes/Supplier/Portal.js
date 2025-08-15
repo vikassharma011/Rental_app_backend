@@ -653,17 +653,25 @@ router.get("/earnings/:id", authenticateSupplier, async (req, res) => {
   try {
     const supplier_id = req.params.id;
     
-    // Get completed payments
+    // Get supplier payments (using supplier_payments which links to maintenance_requests)
     const [payments] = await db.execute(`
       SELECT 
-        p.*,
+        sp.payment_id,
+        sp.amount,
+        sp.payment_method,
+        sp.status,
+        sp.transaction_id,
+        sp.payment_date,
+        sp.remarks,
+        sp.created_at,
+        sp.updated_at,
         mr.issue_description,
-        pr.title as property_title
-      FROM payments p
-      LEFT JOIN maintenance_requests mr ON p.request_id = mr.request_id
+        pr.title AS property_title
+      FROM supplier_payments sp
+      LEFT JOIN maintenance_requests mr ON sp.maintenance_request_id = mr.request_id
       LEFT JOIN property pr ON mr.property_id = pr.property_id
-      WHERE p.supplier_id = ? AND p.status = 'completed'
-      ORDER BY p.payment_date DESC
+      WHERE sp.supplier_id = ?
+      ORDER BY COALESCE(sp.payment_date, sp.created_at) DESC
     `, [supplier_id]);
     
     // Get pending payments
@@ -680,7 +688,9 @@ router.get("/earnings/:id", authenticateSupplier, async (req, res) => {
     `, [supplier_id]);
     
     // Calculate totals
-    const totalEarnings = payments.reduce((sum, p) => sum + parseFloat(p.amount), 0);
+    const totalEarnings = payments
+      .filter(p => p.status === 'completed')
+      .reduce((sum, p) => sum + (parseFloat(p.amount) || 0), 0);
     const pendingAmount = pending.reduce((sum, p) => sum + parseFloat(p.amount), 0);
     
     res.json({ 
