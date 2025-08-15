@@ -8,15 +8,30 @@ const router = express.Router();
 // Simple authentication middleware for supplier
 function authenticateSupplier(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
-  if (!token) return res.status(401).json({ success: false });
+  console.log('🔐 Supplier Auth - Token present:', !!token);
+  console.log('🔐 Supplier Auth - Headers:', req.headers);
+  
+  if (!token) {
+    console.log('❌ Supplier Auth - No token provided');
+    return res.status(401).json({ success: false, message: "No token provided" });
+  }
+  
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    console.log('🔐 Supplier Auth - Decoded token:', decoded);
+    console.log('🔐 Supplier Auth - User role:', decoded.role);
+    console.log('🔐 Supplier Auth - Expected role: supplier');
+    
     if (decoded.role !== "supplier") {
+      console.log('❌ Supplier Auth - Role mismatch:', decoded.role);
       return res.status(403).json({ success: false, message: "Only suppliers allowed" });
     }
+    
     req.user = decoded;
+    console.log('✅ Supplier Auth - Authentication successful');
     next();
-  } catch {
+  } catch (error) {
+    console.log('❌ Supplier Auth - JWT verification failed:', error.message);
     res.status(401).json({ success: false, message: "Invalid token" });
   }
 }
