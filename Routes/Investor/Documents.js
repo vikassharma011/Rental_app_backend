@@ -89,7 +89,7 @@ router.post("/documents", authenticateUser, async (req, res) => {
   try {
     const { property_id, document_name, doc_type, file_url, visible_to_tenant, visible_to_supplier } = req.body;
     
-    if (!property_id || !document_name || !doc_type || !file_url) {
+    if (!property_id || !doc_type || !file_url) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -100,7 +100,7 @@ router.post("/documents", authenticateUser, async (req, res) => {
     `, [
       property_id,
       req.user.userId,
-      document_name,
+      document_name || '',
       file_url,
       doc_type,
       visible_to_tenant ? 1 : 0,

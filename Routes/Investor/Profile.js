@@ -345,13 +345,15 @@ router.get("/activity/:id", async (req, res) => {
 router.post("/profile/:id/upload-picture", upload.single('profile_picture'), async (req, res) => {
   try {
     const { id } = req.params;
+    const { file_url } = req.body || {};
     
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
+    // Support either direct Cloudinary URL via body or uploaded file
+    if (!req.file && !file_url) {
+      return res.status(400).json({ error: "No file uploaded or file_url provided" });
     }
 
-    // Generate the file URL (in production, this would be a CDN URL)
-    const fileUrl = `${req.protocol}://${req.get('host')}/uploads/profile-pictures/${req.file.filename}`;
+    // Prefer provided Cloudinary URL; otherwise construct local URL
+    const fileUrl = file_url || `${req.protocol}://${req.get('host')}/uploads/profile-pictures/${req.file.filename}`;
     
     // Update user profile with the new picture URL
     await db.execute(

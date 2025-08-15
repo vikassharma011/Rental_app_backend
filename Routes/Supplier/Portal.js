@@ -293,6 +293,50 @@ router.put("/profile/:id", async (req, res) => {
   }
 });
 
+// Change supplier password
+router.put("/profile/:id/change-password", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) {
+      return res.status(400).json({ error: "Current and new password are required" });
+    }
+    const [[user]] = await db.execute(
+      "SELECT password_hash FROM users WHERE user_id = ? AND role = 'supplier'",
+      [id]
+    );
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.password_hash !== current_password) {
+      return res.status(400).json({ error: "Current password is incorrect" });
+    }
+    await db.execute(
+      "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'supplier'",
+      [new_password, id]
+    );
+    res.json({ message: "Password changed successfully" });
+  } catch (error) {
+    console.error("Error changing supplier password:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Upload supplier profile picture (accepts Cloudinary URL via file_url)
+router.post("/profile/:id/upload-picture", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { file_url } = req.body || {};
+    if (!file_url) return res.status(400).json({ error: "file_url is required" });
+    await db.execute(
+      "UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'supplier'",
+      [file_url, id]
+    );
+    res.json({ message: "Profile picture updated", profile_picture_url: file_url });
+  } catch (error) {
+    console.error("Error uploading supplier profile picture:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Tasks (assigned)
 router.get("/tasks/:id", async (req, res) => {
   try {

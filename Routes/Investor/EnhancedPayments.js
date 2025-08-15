@@ -374,6 +374,34 @@ router.post("/tenant/create-payment-intent", authenticateUser, async (req, res) 
   }
 });
 
+// Alias route used by frontend for rent PaymentIntent
+router.post("/stripe/create-rent-payment-intent", authenticateUser, async (req, res) => {
+  try {
+    const { amount, currency = 'inr', metadata = {} } = req.body;
+    if (!amount) return res.status(400).json({ error: "Amount is required" });
+    const result = await createPaymentIntent(amount, currency, { ...metadata, context: 'rent_payment' });
+    if (!result.success) return res.status(400).json({ error: result.error });
+    res.json({ success: true, client_secret: result.clientSecret, payment_intent_id: result.paymentIntentId });
+  } catch (error) {
+    console.error('Error creating rent payment intent:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Confirm a Stripe PaymentIntent and return its status
+router.post("/stripe/confirm-payment", authenticateUser, async (req, res) => {
+  try {
+    const { payment_intent_id } = req.body;
+    if (!payment_intent_id) return res.status(400).json({ error: "payment_intent_id is required" });
+    const result = await confirmPayment(payment_intent_id);
+    if (!result.success) return res.status(400).json({ error: result.error });
+    res.json({ success: true, payment_intent: result.paymentIntent, transaction_id: result.transactionId });
+  } catch (error) {
+    console.error('Error confirming payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Test endpoint to check all payments (for debugging)
 router.get("/debug/payments/:tenant_id", authenticateUser, async (req, res) => {
   try {
@@ -703,22 +731,66 @@ router.post("/investor/pay-supplier", async (req, res) => {
     const finalPaymentMethod = payment_method || 'bank_transfer';
     const finalRemarks = remarks || '';
 
-    // First, create a supplier payment record
-    const [supplierPaymentResult] = await db.execute(`
-      INSERT INTO supplier_payments (
-        supplier_id, maintenance_request_id, quote_id, amount, 
-        payment_method, status, transaction_id, remarks, 
-        payment_date, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, CURDATE(), NOW(), NOW())
-    `, [
-      supplier_id,
-      maintenance_request_id,
-      quote_id,
-      amount,
-      finalPaymentMethod,
-      payment_intent_id || null,
-      finalRemarks
-    ]);
+    // If paying via bank/upi, ensure supplier has a default bank account
+    let bankAccountId = null;
+    if (finalPaymentMethod === 'bank_transfer' || finalPaymentMethod === 'upi') {
+      try {
+        const [accounts] = await db.execute(
+          "SELECT account_id FROM supplier_bank_accounts WHERE supplier_id = ? AND is_active = 1 ORDER BY is_default DESC, created_at DESC LIMIT 1",
+          [supplier_id]
+        );
+        if (!accounts || accounts.length === 0) {
+          return res.status(400).json({ error: "Supplier does not have a bank account on file" });
+        }
+        bankAccountId = accounts[0].account_id;
+      } catch (e) {
+        // If table doesn't exist, return clear guidance
+        if (e.message && e.message.includes('supplier_bank_accounts')) {
+          return res.status(400).json({ error: "Missing table supplier_bank_accounts. Please create it and set a default bank account for supplier." });
+        }
+        throw e;
+      }
+    }
+
+    // First, create a supplier payment record (try with bank_account_id if column exists)
+    let supplierPaymentResult;
+    try {
+      const [res1] = await db.execute(`
+        INSERT INTO supplier_payments (
+          supplier_id, maintenance_request_id, quote_id, amount,
+          payment_method, status, transaction_id, remarks,
+          payment_date, bank_account_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, CURDATE(), ?, NOW(), NOW())
+      `, [
+        supplier_id,
+        maintenance_request_id,
+        quote_id,
+        amount,
+        finalPaymentMethod,
+        payment_intent_id || null,
+        finalRemarks,
+        bankAccountId
+      ]);
+      supplierPaymentResult = res1;
+    } catch (err) {
+      // Fallback for schema without bank_account_id
+      const [res2] = await db.execute(`
+        INSERT INTO supplier_payments (
+          supplier_id, maintenance_request_id, quote_id, amount,
+          payment_method, status, transaction_id, remarks,
+          payment_date, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, 'completed', ?, ?, CURDATE(), NOW(), NOW())
+      `, [
+        supplier_id,
+        maintenance_request_id,
+        quote_id,
+        amount,
+        finalPaymentMethod,
+        payment_intent_id || null,
+        finalRemarks
+      ]);
+      supplierPaymentResult = res2;
+    }
 
     // Update the maintenance quote payment status
     await db.execute(`
@@ -730,8 +802,8 @@ router.post("/investor/pay-supplier", async (req, res) => {
     // Create a payment record in the main payments table
     const [mainPaymentResult] = await db.execute(`
       INSERT INTO payments (
-        supplier_id, amount, payment_type, payment_method, 
-        transaction_id, status, payment_date, remarks, 
+        supplier_id, amount, payment_type, payment_method,
+        transaction_id, status, payment_date, remarks,
         created_at, updated_at
       ) VALUES (?, ?, 'supplier', ?, ?, 'completed', CURDATE(), ?, NOW(), NOW())
     `, [
@@ -753,6 +825,39 @@ router.post("/investor/pay-supplier", async (req, res) => {
   } catch (error) {
     console.error("Error processing supplier payment:", error);
     res.status(500).json({ error: "Failed to process supplier payment" });
+  }
+});
+
+// Create Stripe PaymentIntent for paying a supplier (card/UPI via Stripe)
+router.post("/stripe/create-supplier-payment-intent", authenticateUser, async (req, res) => {
+  try {
+    const { supplier_id, maintenance_request_id, quote_id, amount, currency = 'inr' } = req.body;
+
+    if (!supplier_id || !quote_id || !amount) {
+      return res.status(400).json({ error: "Missing required fields: supplier_id, quote_id, amount" });
+    }
+
+    const metadata = {
+      context: 'supplier_payment',
+      supplier_id: String(supplier_id),
+      quote_id: String(quote_id),
+      maintenance_request_id: maintenance_request_id ? String(maintenance_request_id) : '',
+      investor_id: String(req.user?.userId || ''),
+    };
+
+    const result = await createPaymentIntent(Number(amount), currency, metadata);
+    if (!result.success) {
+      return res.status(400).json({ error: result.error || 'Failed to create payment intent' });
+    }
+
+    res.json({
+      success: true,
+      client_secret: result.clientSecret,
+      payment_intent_id: result.paymentIntentId,
+    });
+  } catch (error) {
+    console.error('Error creating supplier payment intent:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

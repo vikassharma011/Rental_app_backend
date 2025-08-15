@@ -3,8 +3,8 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Initialize Stripe with the provided test keys
-const stripe = new Stripe('sk_test_51RtqCK85UAqQraHRPjXclqzjvyako5MOowBKCIfdMlsA0YPOGSwhWDWrrcqRxaoETmDJdBhr78Z7ZYy0IoVMVMtc002sGJ5W8a', {
+// Initialize Stripe from environment variable, fallback to test key for local
+const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || 'sk_test_51RtqCK85UAqQraHRPjXclqzjvyako5MOowBKCIfdMlsA0YPOGSwhWDWrrcqRxaoETmDJdBhr78Z7ZYy0IoVMVMtc002sGJ5W8a', {
   apiVersion: '2024-06-20',
 });
 

@@ -11,6 +11,7 @@ router.post("/add/property", async (req, res) => {
     const {
       title,
       image,
+      image_url,
       address,
       city,
       state,
@@ -26,7 +27,8 @@ router.post("/add/property", async (req, res) => {
 
     // Ensure all parameters are defined and not undefined
     const finalTitle = title || '';
-    const finalImage = image || null;
+    // Accept either `image_url` or `image` from client
+    const finalImage = image_url || image || null;
     const finalAddress = address || '';
     const finalCity = city || '';
     const finalState = state || '';

@@ -828,6 +828,50 @@ router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async
   }
 });
 
+// Change tenant password
+router.put("/profile/:id/change-password", authenticateTenant, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { oldPassword, newPassword } = req.body;
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ error: "Old and new passwords are required" });
+    }
+    const [[user]] = await db.execute(
+      "SELECT password_hash FROM users WHERE user_id = ? AND role = 'tenant'",
+      [id]
+    );
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (user.password_hash !== oldPassword) {
+      return res.status(400).json({ error: "Current password is incorrect" });
+    }
+    await db.execute(
+      "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'tenant'",
+      [newPassword, id]
+    );
+    res.json({ message: "Password changed successfully" });
+  } catch (error) {
+    console.error("Error changing tenant password:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+// Upload tenant profile picture (accepts Cloudinary URL)
+router.post("/profile/:id/upload-picture", authenticateTenant, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { file_url } = req.body || {};
+    if (!file_url) return res.status(400).json({ error: "file_url is required" });
+    await db.execute(
+      "UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'tenant'",
+      [file_url, id]
+    );
+    res.json({ message: "Profile picture updated", profile_picture_url: file_url });
+  } catch (error) {
+    console.error("Error uploading tenant profile picture:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // Error handling middleware for multer
 router.use((error, req, res, next) => {
   if (error instanceof multer.MulterError) {
