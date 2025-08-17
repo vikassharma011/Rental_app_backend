@@ -979,7 +979,7 @@ router.get("/rent-status/:id", async (req, res) => {
           ELSE 'upcoming'
         END as rent_status
       FROM leases l
-      JOIN property p ON l.property_id = p.property_id
+      LEFT JOIN property p ON l.property_id = p.property_id
       WHERE l.tenant_id = ? AND l.status = 'active'
       ORDER BY l.start_date DESC
       LIMIT 1
@@ -1049,22 +1049,9 @@ router.get("/payment-methods/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
     
-    // Get saved payment methods
-    const [paymentMethods] = await db.execute(`
-      SELECT 
-        pm.method_id,
-        pm.payment_type,
-        pm.payment_method,
-        pm.card_last_four,
-        pm.card_brand,
-        pm.is_default,
-        pm.created_at
-      FROM payment_methods pm
-      WHERE pm.tenant_id = ? AND pm.is_active = 1
-      ORDER BY pm.is_default DESC, pm.created_at DESC
-    `, [tenant_id]);
-    
-    res.json({ methods: paymentMethods });
+    // For now, return empty array since payment_methods table doesn't exist
+    // TODO: Create payment_methods table when implementing actual payment processing
+    res.json({ methods: [] });
   } catch (error) {
     console.error('Error fetching payment methods:', error);
     res.status(500).json({ error: error.message });
@@ -1076,25 +1063,9 @@ router.get("/auto-pay/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
     
-    // Get auto-pay settings
-    const [autoPaySettings] = await db.execute(`
-      SELECT 
-        ap.setting_id,
-        ap.payment_method_id,
-        ap.amount,
-        ap.frequency,
-        ap.next_payment_date,
-        ap.is_active,
-        ap.created_at,
-        pm.payment_type,
-        pm.payment_method
-      FROM auto_pay_settings ap
-      LEFT JOIN payment_methods pm ON ap.payment_method_id = pm.method_id
-      WHERE ap.tenant_id = ? AND ap.is_active = 1
-      ORDER BY ap.created_at DESC
-    `, [tenant_id]);
-    
-    res.json({ settings: autoPaySettings });
+    // For now, return empty array since auto_pay_settings table doesn't exist
+    // TODO: Create auto_pay_settings table when implementing actual auto-pay functionality
+    res.json({ settings: [] });
   } catch (error) {
     console.error('Error fetching auto-pay settings:', error);
     res.status(500).json({ error: error.message });
@@ -1106,26 +1077,9 @@ router.get("/rent-schedules/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
     
-    // Get rent schedules
-    const [rentSchedules] = await db.execute(`
-      SELECT 
-        rs.schedule_id,
-        rs.lease_id,
-        rs.due_date,
-        rs.amount,
-        rs.status,
-        rs.created_at,
-        l.rent_amount,
-        p.title as property_title
-      FROM rent_schedules rs
-      JOIN leases l ON rs.lease_id = l.lease_id
-      JOIN property p ON l.property_id = p.property_id
-      WHERE l.tenant_id = ?
-      ORDER BY rs.due_date DESC
-      LIMIT 12
-    `, [tenant_id]);
-    
-    res.json({ schedules: rentSchedules });
+    // For now, return empty array since rent_schedules table might not exist
+    // TODO: Create rent_schedules table when implementing actual rent scheduling
+    res.json({ schedules: [] });
   } catch (error) {
     console.error('Error fetching rent schedules:', error);
     res.status(500).json({ error: error.message });
@@ -1137,25 +1091,80 @@ router.get("/notifications/:id", async (req, res) => {
   try {
     const tenant_id = req.params.id;
     
-    // Get notifications
-    const [notifications] = await db.execute(`
-      SELECT 
-        n.notification_id,
-        n.title,
-        n.message,
-        n.type,
-        n.is_read,
-        n.created_at,
-        n.priority
-      FROM notifications n
-      WHERE n.tenant_id = ? AND n.is_active = 1
-      ORDER BY n.created_at DESC
-      LIMIT 20
-    `, [tenant_id]);
-    
-    res.json({ notifications });
+    // For now, return empty array since notifications table doesn't exist
+    // TODO: Create notifications table when implementing actual notification system
+    res.json({ notifications: [] });
   } catch (error) {
     console.error('Error fetching notifications:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment history (enhanced version)
+router.get("/payment-history/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const { limit = 20, page = 1 } = req.query;
+    
+    const limitNum = parseInt(limit);
+    const offset = (parseInt(page) - 1) * limitNum;
+    
+    // Build where clause for filtering
+    let whereClause = "WHERE p.tenant_id = ?";
+    const params = [tenant_id];
+    
+    // Get total count first
+    const countQuery = `SELECT COUNT(*) as total FROM payments p ${whereClause}`;
+    const [[countResult]] = await db.execute(countQuery, params);
+    
+    // Get paginated results
+    const paymentsQuery = `
+      SELECT 
+        p.payment_id,
+        p.lease_id,
+        p.tenant_id,
+        p.amount,
+        p.late_fee_amount,
+        p.total_amount,
+        p.payment_date,
+        p.due_date,
+        p.remarks,
+        p.receipt_url,
+        p.payment_type,
+        p.payment_method,
+        p.transaction_id,
+        p.status,
+        p.created_at,
+        p.updated_at,
+        l.rent_amount,
+        l.start_date as lease_start_date,
+        l.end_date as lease_end_date
+      FROM payments p
+      LEFT JOIN leases l ON p.lease_id = l.lease_id
+      ${whereClause}
+      ORDER BY p.payment_date DESC
+      LIMIT ? OFFSET ?
+    `;
+    
+    const finalParams = [
+      tenant_id.toString(),
+      limitNum.toString(),
+      offset.toString()
+    ];
+    
+    const [payments] = await db.execute(paymentsQuery, finalParams);
+    
+    res.json({
+      payments,
+      pagination: {
+        current_page: parseInt(page),
+        total_pages: Math.ceil(countResult.total / limitNum),
+        total_items: countResult.total,
+        items_per_page: limitNum
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching payment history:', error);
     res.status(500).json({ error: error.message });
   }
 });
