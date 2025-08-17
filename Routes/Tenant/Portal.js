@@ -679,10 +679,8 @@ router.get("/rent-schedules/:id", async (req, res) => {
       SELECT 
         rs.*,
         l.rent_amount,
-        l.due_date as lease_due_date,
-        l.late_fee,
-        l.late_fee_percentage,
-        l.grace_period_days
+        l.start_date as lease_start_date,
+        l.end_date as lease_end_date
       FROM rent_schedules rs
       JOIN leases l ON rs.lease_id = l.lease_id
       WHERE l.tenant_id = ?
@@ -1106,17 +1104,15 @@ router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
 
     const total = countResult.total;
 
-    // Get payments with proper joins
+    // Get payments with simplified joins
     const [payments] = await db.execute(`
       SELECT 
         p.*,
         l.rent_amount,
-        rs.due_date as schedule_due_date,
-        rs.month_year
+        l.start_date as lease_start_date,
+        l.end_date as lease_end_date
       FROM payments p
       LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN rent_schedules rs ON rs.lease_id = p.lease_id 
-        AND rs.month_year = DATE_FORMAT(p.payment_date, '%Y-%m')
       ${whereClause}
       ORDER BY p.payment_date DESC
       LIMIT ? OFFSET ?
@@ -1146,16 +1142,10 @@ router.get("/rent-schedules/:id", authenticateTenant, async (req, res) => {
       SELECT 
         rs.*,
         l.rent_amount,
-        p.payment_id,
-        p.payment_date,
-        p.payment_method,
-        p.status as payment_status,
-        p.amount as payment_amount
+        l.start_date as lease_start_date,
+        l.end_date as lease_end_date
       FROM rent_schedules rs
       JOIN leases l ON rs.lease_id = l.lease_id
-      LEFT JOIN payments p ON p.lease_id = rs.lease_id 
-        AND p.payment_type = 'rent'
-        AND rs.month_year = DATE_FORMAT(p.payment_date, '%Y-%m')
       WHERE l.tenant_id = ?
       ORDER BY rs.due_date DESC
     `, [tenant_id]);
