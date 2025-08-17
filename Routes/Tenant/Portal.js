@@ -1048,6 +1048,8 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
       card_details
     } = req.body;
 
+    console.log('Rent Payment Request:', { tenant_id, lease_id, amount, payment_method, schedule_id, remarks, payment_intent_id });
+
     if (!tenant_id || !lease_id || !amount || !payment_method) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -1060,6 +1062,8 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
     if (!lease) {
       return res.status(404).json({ error: "Lease not found" });
     }
+
+    console.log('Lease found:', lease);
 
     // Calculate late fees
     let lateFeeAmount = 0;
@@ -1081,6 +1085,7 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
             const lateFeePercentage = lease.late_fee_percentage || 5.00;
             lateFeeAmount = (schedule.amount * lateFeePercentage) / 100;
             totalAmount += lateFeeAmount;
+            console.log('Late fee calculated:', { daysLate, gracePeriod, lateFeePercentage, lateFeeAmount, totalAmount });
           }
         }
       }
@@ -1090,18 +1095,28 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
     const transactionId = payment_intent_id || 
       `${payment_method.toUpperCase()}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
+    console.log('Transaction details:', { transactionId, totalAmount, lateFeeAmount });
+
     // Insert payment record
-    const [paymentResult] = await db.execute(`
+    const insertQuery = `
       INSERT INTO payments (
         lease_id, tenant_id, amount, late_fee_amount, total_amount, 
         payment_type, payment_method, transaction_id, payment_date, 
-        due_date, remarks, status, gateway_response
-      ) VALUES (?, ?, ?, ?, ?, 'rent', ?, ?, CURDATE(), ?, ?, 'completed', ?)
-    `, [lease_id, tenant_id, amount, lateFeeAmount, totalAmount, 
+        due_date, remarks, status
+      ) VALUES (?, ?, ?, ?, ?, 'rent', ?, ?, CURDATE(), ?, ?, 'completed')
+    `;
+    
+    const insertParams = [lease_id, tenant_id, amount, lateFeeAmount, totalAmount, 
         payment_method, transactionId, new Date().toISOString().slice(0, 10), 
-        remarks || '', JSON.stringify({ payment_intent_id, card_details })]);
+        remarks || ''];
 
+    console.log('Insert query:', insertQuery);
+    console.log('Insert params:', insertParams);
+
+    const [paymentResult] = await db.execute(insertQuery, insertParams);
     const paymentId = paymentResult.insertId;
+
+    console.log('Payment inserted successfully:', { paymentId });
 
     // Update rent schedule status if schedule_id provided
     if (schedule_id) {
@@ -1110,6 +1125,7 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
         SET status = 'paid', payment_id = ?
         WHERE schedule_id = ?
       `, [paymentId, schedule_id]);
+      console.log('Rent schedule updated to paid');
     }
 
     // Update lease payment status
@@ -1119,16 +1135,25 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
       WHERE lease_id = ?
     `, [lease_id]);
 
-    res.json({
+    const response = {
       message: "Rent payment processed successfully",
       payment_id: paymentId,
       transaction_id: transactionId,
       amount: totalAmount,
       late_fee_amount: lateFeeAmount
-    });
+    };
+
+    console.log('Payment successful, sending response:', response);
+    res.json(response);
+    
   } catch (error) {
     console.error('Error processing rent payment:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: "Failed to process rent payment",
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
