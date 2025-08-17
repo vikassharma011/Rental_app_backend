@@ -588,10 +588,15 @@ router.get("/inventory/:id", async (req, res) => {
 // Get tenant's notifications
 router.get("/notifications/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Get recent messages
-    const [messages] = await db.execute(`
+    const [messages] = await executeWithRetry(`
       SELECT 
         m.*,
         CONCAT(s.first_name, ' ', s.last_name) as sender_name,
@@ -604,7 +609,7 @@ router.get("/notifications/:id", async (req, res) => {
     `, [tenant_id]);
     
     // Get maintenance updates
-    const [maintenanceUpdates] = await db.execute(`
+    const [maintenanceUpdates] = await executeWithRetry(`
       SELECT 
         mr.request_id,
         mr.status,
@@ -647,7 +652,7 @@ router.get("/notifications/:id", async (req, res) => {
 // Upload maintenance photo
 router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async (req, res) => {
   try {
-    const { tenantId } = req.params;
+    const tenantId = parseInt(req.params.tenantId);
     
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded" });
@@ -666,69 +671,16 @@ router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async
   }
 });
 
-// Change tenant password
-router.put("/profile/:id/change-password", authenticateTenant, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { oldPassword, newPassword } = req.body;
-    if (!oldPassword || !newPassword) {
-      return res.status(400).json({ error: "Old and new passwords are required" });
-    }
-    const [[user]] = await db.execute(
-      "SELECT password_hash FROM users WHERE user_id = ? AND role = 'tenant'",
-      [id]
-    );
-    if (!user) return res.status(404).json({ error: "User not found" });
-    if (user.password_hash !== oldPassword) {
-      return res.status(400).json({ error: "Current password is incorrect" });
-    }
-    await db.execute(
-      "UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'tenant'",
-      [newPassword, id]
-    );
-    res.json({ message: "Password changed successfully" });
-  } catch (error) {
-    console.error("Error changing tenant password:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Upload tenant profile picture (accepts Cloudinary URL)
-router.post("/profile/:id/upload-picture", authenticateTenant, async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { file_url } = req.body || {};
-    if (!file_url) return res.status(400).json({ error: "file_url is required" });
-    await db.execute(
-      "UPDATE users SET profile_picture_url = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND role = 'tenant'",
-      [file_url, id]
-    );
-    res.json({ message: "Profile picture updated", profile_picture_url: file_url });
-  } catch (error) {
-    console.error("Error uploading tenant profile picture:", error);
-    res.status(500).json({ error: "Internal server error" });
-  }
-});
-
-// Error handling middleware for multer
-router.use((error, req, res, next) => {
-  if (error instanceof multer.MulterError) {
-    if (error.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
-    }
-    return res.status(400).json({ error: error.message });
-  }
-  if (error) {
-    return res.status(400).json({ error: error.message });
-  }
-  next();
-});
-
 // Get tenant's maintenance request by ID with detailed information
 router.get("/maintenance/request/:requestId", async (req, res) => {
   try {
-    const request_id = req.params.requestId;
-    const [[request]] = await db.execute(`
+    const request_id = parseInt(req.params.requestId);
+    
+    if (isNaN(request_id)) {
+      return res.status(400).json({ error: 'Invalid request ID' });
+    }
+    
+    const [request] = await executeWithRetry(`
       SELECT 
         mr.*,
         p.title as property_title,
@@ -745,12 +697,12 @@ router.get("/maintenance/request/:requestId", async (req, res) => {
       WHERE mr.request_id = ?
     `, [request_id]);
     
-    if (!request) {
+    if (request.length === 0) {
       return res.status(404).json({ error: "Maintenance request not found" });
     }
     
     // Get quotes for this request
-    const [quotes] = await db.execute(`
+    const [quotes] = await executeWithRetry(`
       SELECT 
         mq.*,
         u.first_name as supplier_first_name,
@@ -764,7 +716,7 @@ router.get("/maintenance/request/:requestId", async (req, res) => {
     `, [request_id]);
     
     res.json({ 
-      request, 
+      request: request[0], 
       quotes,
       total_quotes: quotes.length,
       lowest_quote: quotes.length > 0 ? Math.min(...quotes.map(q => q.amount)) : null
@@ -778,19 +730,24 @@ router.get("/maintenance/request/:requestId", async (req, res) => {
 // Get tenant's maintenance history with pagination
 router.get("/maintenance/history/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
     
-    // Get total count - ensure consistent parameter types
-    const [[countResult]] = await db.execute(
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+    
+    // Get total count
+    const [countResult] = await executeWithRetry(
       "SELECT COUNT(*) as total FROM maintenance_requests WHERE tenant_id = ?",
-      [tenant_id.toString()]
+      [tenant_id]
     );
     
-    // Get paginated results - ensure consistent parameter types
-    const [requests] = await db.execute(`
+    // Get paginated results
+    const [requests] = await executeWithRetry(`
       SELECT 
         mr.*,
         p.title as property_title,
@@ -805,14 +762,14 @@ router.get("/maintenance/history/:id", async (req, res) => {
       WHERE mr.tenant_id = ?
       ORDER BY mr.created_at DESC
       LIMIT ? OFFSET ?
-    `, [tenant_id.toString(), limit.toString(), offset.toString()]);
+    `, [tenant_id, limit, offset]);
     
     res.json({ 
       requests,
       pagination: {
         current_page: page,
-        total_pages: Math.ceil(countResult.total / limit),
-        total_items: countResult.total,
+        total_pages: Math.ceil(countResult[0].total / limit),
+        total_items: countResult[0].total,
         items_per_page: limit
       }
     });
@@ -822,84 +779,15 @@ router.get("/maintenance/history/:id", async (req, res) => {
   }
 });
 
-// Get tenant's payment history with pagination and filters
-router.get("/payments/history/:id", async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const page = parseInt(req.query.page) || 1;
-    const limit = parseInt(req.query.limit) || 10;
-    const offset = (page - 1) * limit;
-    const status = req.query.status; // optional filter
-    const payment_type = req.query.payment_type; // optional filter
-    
-    let whereClause = "WHERE p.tenant_id = ?";
-    let params = [tenant_id];
-    
-    if (status) {
-      whereClause += " AND p.status = ?";
-      params.push(status);
-    }
-    
-    if (payment_type) {
-      whereClause += " AND p.payment_type = ?";
-      params.push(payment_type);
-    }
-    
-    // Get total count - ensure consistent parameter types
-    const countParams = [
-      tenant_id.toString(),
-      ...(status ? [status] : []),
-      ...(payment_type ? [payment_type] : [])
-    ];
-    
-    const [[countResult]] = await db.execute(
-      `SELECT COUNT(*) as total FROM payments p ${whereClause}`,
-      countParams
-    );
-    
-    // Get paginated results - ensure consistent parameter types
-    const finalParams = [
-      tenant_id.toString(),
-      ...(status ? [status] : []),
-      ...(payment_type ? [payment_type] : []),
-      limit.toString(),
-      offset.toString()
-    ];
-    
-    const [payments] = await db.execute(`
-      SELECT 
-        p.*,
-        l.rent_amount,
-        l.due_date as lease_due_date,
-        prop.title as property_title,
-        prop.address as property_address
-      FROM payments p
-      LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN property prop ON l.property_id = prop.property_id
-      ${whereClause}
-      ORDER BY p.payment_date DESC
-      LIMIT ? OFFSET ?
-    `, finalParams);
-    
-    res.json({ 
-      payments,
-      pagination: {
-        current_page: page,
-        total_pages: Math.ceil(countResult.total / limit),
-        total_items: countResult.total,
-        items_per_page: limit
-      }
-    });
-  } catch (error) {
-    console.error('Error fetching payment history:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Get tenant's reminders
 router.get("/reminders/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Get rent due reminders
     const [rentReminders] = await executeWithRetry(`
@@ -973,59 +861,15 @@ router.get("/reminders/:id", async (req, res) => {
   }
 });
 
-// Create new reminder
-router.post("/reminders/:id", async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const { type, title, message, due_date, priority, reference_id } = req.body;
-    
-    // For now, we'll store reminders in a simple way
-    // In a real app, you'd have a reminders table
-    const reminder = {
-      id: Date.now(),
-      tenant_id,
-      type,
-      title,
-      message,
-      due_date,
-      priority,
-      reference_id,
-      status: 'active',
-      created_at: new Date()
-    };
-    
-    res.json({ 
-      success: true, 
-      message: 'Reminder created successfully',
-      reminder 
-    });
-  } catch (error) {
-    console.error('Error creating reminder:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update reminder status
-router.put("/reminders/:id/:reminderId", async (req, res) => {
-  try {
-    const { id: tenant_id, reminderId } = req.params;
-    const { status, completed_at } = req.body;
-    
-    // Update reminder logic here
-    res.json({ 
-      success: true, 
-      message: 'Reminder updated successfully' 
-    });
-  } catch (error) {
-    console.error('Error updating reminder:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
 // Get tenant's settings
 router.get("/settings/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Get user preferences
     const [userData] = await executeWithRetry(`
@@ -1108,8 +952,13 @@ router.get("/settings/:id", async (req, res) => {
 // Update tenant's settings
 router.put("/settings/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
     const { profile, autoPay, preferences } = req.body;
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Update profile if provided
     if (profile) {
@@ -1156,197 +1005,31 @@ router.put("/settings/:id", async (req, res) => {
   }
 });
 
-// Get tenant's payment methods
-router.get("/payment-methods/:id", async (req, res) => {
+// Get tenant's rent schedules
+router.get("/rent-schedules/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
     
-    const [paymentMethods] = await executeWithRetry(`
-      SELECT 
-        method_id,
-        payment_type,
-        card_last4,
-        bank_name,
-        account_number,
-        upi_id,
-        is_default,
-        is_active,
-        created_at
-      FROM tenant_payment_methods
-      WHERE tenant_id = ?
-      ORDER BY is_default DESC, created_at DESC
-    `, [tenant_id]);
-    
-    res.json({ paymentMethods });
-  } catch (error) {
-    console.error('Error fetching payment methods:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add new payment method
-router.post("/payment-methods/:id", async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const { payment_type, card_last4, bank_name, account_number, upi_id, is_default } = req.body;
-    
-    // If setting as default, unset other defaults first
-    if (is_default) {
-      await executeWithRetry(`
-        UPDATE tenant_payment_methods 
-        SET is_default = 0 
-        WHERE tenant_id = ?
-      `, [tenant_id]);
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
     }
     
-    const [result] = await executeWithRetry(`
-      INSERT INTO tenant_payment_methods 
-      (tenant_id, payment_type, card_last4, bank_name, account_number, upi_id, is_default)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-    `, [tenant_id, payment_type, card_last4, bank_name, account_number, upi_id, is_default]);
-    
-    res.json({ 
-      success: true, 
-      message: 'Payment method added successfully',
-      method_id: result.insertId
-    });
-  } catch (error) {
-    console.error('Error adding payment method:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update payment method
-router.put("/payment-methods/:id/:methodId", async (req, res) => {
-  try {
-    const { id: tenant_id, methodId } = req.params;
-    const { payment_type, card_last4, bank_name, account_number, upi_id, is_default, is_active } = req.body;
-    
-    // If setting as default, unset other defaults first
-    if (is_default) {
-      await executeWithRetry(`
-        UPDATE tenant_payment_methods 
-        SET is_default = 0 
-        WHERE tenant_id = ?
-      `, [tenant_id]);
-    }
-    
-    await executeWithRetry(`
-      UPDATE tenant_payment_methods 
-      SET 
-        payment_type = ?,
-        card_last4 = ?,
-        bank_name = ?,
-        account_number = ?,
-        upi_id = ?,
-        is_default = ?,
-        is_active = ?,
-        updated_at = CURRENT_TIMESTAMP
-      WHERE method_id = ? AND tenant_id = ?
-    `, [payment_type, card_last4, bank_name, account_number, upi_id, is_default, is_active, methodId, tenant_id]);
-    
-    res.json({ 
-      success: true, 
-      message: 'Payment method updated successfully' 
-    });
-  } catch (error) {
-    console.error('Error updating payment method:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete payment method
-router.delete("/payment-methods/:id/:methodId", async (req, res) => {
-  try {
-    const { id: tenant_id, methodId } = req.params;
-    
-    await executeWithRetry(`
-      DELETE FROM tenant_payment_methods 
-      WHERE method_id = ? AND tenant_id = ?
-    `, [methodId, tenant_id]);
-    
-    res.json({ 
-      success: true, 
-      message: 'Payment method deleted successfully' 
-    });
-  } catch (error) {
-    console.error('Error deleting payment method:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Get tenant's notifications
-router.get("/notifications/:id", async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const limit = parseInt(req.query.limit) || 20;
-    
-    // Get rent notifications
-    const [rentNotifications] = await executeWithRetry(`
+    const [schedules] = await executeWithRetry(`
       SELECT 
-        'rent' as type,
-        'Rent Payment' as title,
-        CASE 
-          WHEN p.status = 'completed' THEN 'Rent payment completed successfully'
-          WHEN p.status = 'pending' THEN 'Rent payment is pending'
-          ELSE 'Rent payment failed'
-        END as message,
-        p.created_at as timestamp,
-        p.status as status,
-        'payment' as category
-      FROM payments p
-      WHERE p.tenant_id = ? AND p.payment_type = 'rent'
-      ORDER BY p.created_at DESC
-      LIMIT ?
-    `, [tenant_id, limit]);
-
-    // Get maintenance notifications
-    const [maintenanceNotifications] = await executeWithRetry(`
-      SELECT 
-        'maintenance' as type,
-        'Maintenance Request' as title,
-        CASE 
-          WHEN mr.status = 'completed' THEN 'Maintenance request completed'
-          WHEN mr.status = 'assigned' THEN 'Supplier assigned to your request'
-          WHEN mr.status = 'in_progress' THEN 'Maintenance work in progress'
-          ELSE 'New maintenance request created'
-        END as message,
-        mr.updated_at as timestamp,
-        mr.status as status,
-        'maintenance' as category
-      FROM maintenance_requests mr
-      WHERE mr.tenant_id = ?
-      ORDER BY mr.updated_at DESC
-      LIMIT ?
-    `, [tenant_id, limit]);
-
-    // Get lease notifications
-    const [leaseNotifications] = await executeWithRetry(`
-      SELECT 
-        'lease' as type,
-        'Lease Update' as title,
-        CASE 
-          WHEN l.end_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY) THEN 'Your lease expires soon'
-          ELSE 'Lease information updated'
-        END as message,
-        l.updated_at as timestamp,
-        'active' as status,
-        'lease' as category
-      FROM leases l
+        rs.*,
+        l.rent_amount,
+        p.title as property_title
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
       WHERE l.tenant_id = ?
-      ORDER BY l.updated_at DESC
-      LIMIT ?
-    `, [tenant_id, limit]);
+      ORDER BY rs.due_date DESC
+    `, [tenant_id]);
 
-    const notifications = [
-      ...rentNotifications,
-      ...maintenanceNotifications,
-      ...leaseNotifications
-    ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-    res.json({ notifications });
+    res.json({ schedules: schedules || [] });
   } catch (error) {
-    console.error('Error fetching notifications:', error);
+    console.error('Error fetching rent schedules:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -1461,7 +1144,12 @@ router.get("/dashboard/analytics/:id", async (req, res) => {
 // Get tenant's rent status
 router.get("/rent-status/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Get current rent status
     const [rentStatus] = await executeWithRetry(`
@@ -1586,7 +1274,7 @@ router.put("/auto-pay/:id", async (req, res) => {
         WHERE tenant_id = ? AND lease_id = ?
       `, [payment_method_id, is_active, auto_pay_date, tenant_id, lease_id]);
     } else {
-      // Create new setting
+      // Create new auto-pay setting
       await executeWithRetry(`
         INSERT INTO auto_pay_settings 
         (tenant_id, lease_id, payment_method_id, is_active, auto_pay_date)
@@ -1607,10 +1295,15 @@ router.put("/auto-pay/:id", async (req, res) => {
 // Get tenant's payment history (enhanced version)
 router.get("/payment-history/:id", async (req, res) => {
   try {
-    const tenant_id = req.params.id;
+    const tenant_id = parseInt(req.params.id);
     const limit = parseInt(req.query.limit) || 20;
     const page = parseInt(req.query.page) || 1;
     const offset = (page - 1) * limit;
+    
+    // Validate tenant_id
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
     
     // Get total count
     const [totalCount] = await executeWithRetry(`
@@ -1759,3 +1452,4 @@ router.post("/rent-payment", async (req, res) => {
 });
 
 export { router as TenantPortalRouter };
+
