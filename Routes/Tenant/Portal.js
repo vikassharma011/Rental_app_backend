@@ -886,4 +886,286 @@ router.use((error, req, res, next) => {
   next();
 });
 
+// Get tenant's auto-pay settings
+router.get("/auto-pay/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const [settings] = await db.execute(`
+      SELECT 
+        aps.*,
+        l.rent_amount,
+        p.title as property_title
+      FROM auto_pay_settings aps
+      JOIN leases l ON aps.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE aps.tenant_id = ?
+    `, [tenant_id]);
+    
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error fetching auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update tenant's auto-pay settings
+router.put("/auto-pay/:id", authenticateTenant, async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const { lease_id, payment_method_id, is_active, auto_pay_date } = req.body;
+    
+    // Check if setting exists
+    const [[existing]] = await db.execute(
+      "SELECT * FROM auto_pay_settings WHERE tenant_id = ? AND lease_id = ?",
+      [tenant_id, lease_id]
+    );
+    
+    if (existing) {
+      // Update existing setting
+      await db.execute(
+        `UPDATE auto_pay_settings 
+         SET payment_method_id = ?, is_active = ?, auto_pay_date = ?, updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = ? AND lease_id = ?`,
+        [payment_method_id, is_active, auto_pay_date, tenant_id, lease_id]
+      );
+    } else {
+      // Create new setting
+      await db.execute(
+        `INSERT INTO auto_pay_settings 
+         (tenant_id, lease_id, payment_method_id, is_active, auto_pay_date) 
+         VALUES (?, ?, ?, ?, ?)`,
+        [tenant_id, lease_id, payment_method_id, is_active, auto_pay_date]
+      );
+    }
+    
+    res.json({ success: true, message: "Auto-pay settings updated successfully" });
+  } catch (error) {
+    console.error('Error updating auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's maintenance request by ID with detailed information
+router.get("/maintenance/request/:requestId", async (req, res) => {
+  try {
+    const request_id = req.params.requestId;
+    const [[request]] = await db.execute(`
+      SELECT 
+        mr.*,
+        p.title as property_title,
+        p.address as property_address,
+        u.first_name as supplier_first_name,
+        u.last_name as supplier_last_name,
+        u.phone as supplier_phone,
+        u.email as supplier_email,
+        l.rent_amount
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users u ON mr.supplier_id = u.user_id
+      LEFT JOIN leases l ON mr.property_id = l.property_id AND l.tenant_id = mr.tenant_id
+      WHERE mr.request_id = ?
+    `, [request_id]);
+    
+    if (!request) {
+      return res.status(404).json({ error: "Maintenance request not found" });
+    }
+    
+    // Get quotes for this request
+    const [quotes] = await db.execute(`
+      SELECT 
+        mq.*,
+        u.first_name as supplier_first_name,
+        u.last_name as supplier_last_name,
+        u.phone as supplier_phone,
+        u.email as supplier_email
+      FROM maintenance_quotes mq
+      JOIN users u ON mq.supplier_id = u.user_id
+      WHERE mq.request_id = ?
+      ORDER BY mq.amount ASC
+    `, [request_id]);
+    
+    res.json({ 
+      request, 
+      quotes,
+      total_quotes: quotes.length,
+      lowest_quote: quotes.length > 0 ? Math.min(...quotes.map(q => q.amount)) : null
+    });
+  } catch (error) {
+    console.error('Error fetching maintenance request:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's maintenance history with pagination
+router.get("/maintenance/history/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
+    // Get total count
+    const [[countResult]] = await db.execute(
+      "SELECT COUNT(*) as total FROM maintenance_requests WHERE tenant_id = ?",
+      [tenant_id]
+    );
+    
+    // Get paginated results
+    const [requests] = await db.execute(`
+      SELECT 
+        mr.*,
+        p.title as property_title,
+        p.address as property_address,
+        u.first_name as supplier_first_name,
+        u.last_name as supplier_last_name,
+        u.phone as supplier_phone,
+        u.email as supplier_email
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      LEFT JOIN users u ON mr.supplier_id = u.user_id
+      WHERE mr.tenant_id = ?
+      ORDER BY mr.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [tenant_id, limit, offset]);
+    
+    res.json({ 
+      requests,
+      pagination: {
+        current_page: page,
+        total_pages: Math.ceil(countResult.total / limit),
+        total_items: countResult.total,
+        items_per_page: limit
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching maintenance history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment history with pagination and filters
+router.get("/payments/history/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    const status = req.query.status; // optional filter
+    const payment_type = req.query.payment_type; // optional filter
+    
+    let whereClause = "WHERE p.tenant_id = ?";
+    let params = [tenant_id];
+    
+    if (status) {
+      whereClause += " AND p.status = ?";
+      params.push(status);
+    }
+    
+    if (payment_type) {
+      whereClause += " AND p.payment_type = ?";
+      params.push(payment_type);
+    }
+    
+    // Get total count
+    const [[countResult]] = await db.execute(
+      `SELECT COUNT(*) as total FROM payments p ${whereClause}`,
+      params
+    );
+    
+    // Get paginated results
+    const [payments] = await db.execute(`
+      SELECT 
+        p.*,
+        l.rent_amount,
+        l.due_date as lease_due_date,
+        prop.title as property_title,
+        prop.address as property_address
+      FROM payments p
+      LEFT JOIN leases l ON p.lease_id = l.lease_id
+      LEFT JOIN property prop ON l.property_id = prop.property_id
+      ${whereClause}
+      ORDER BY p.payment_date DESC
+      LIMIT ? OFFSET ?
+    `, [...params, limit, offset]);
+    
+    res.json({ 
+      payments,
+      pagination: {
+        current_page: page,
+        total_pages: Math.ceil(countResult.total / limit),
+        total_items: countResult.total,
+        items_per_page: limit
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching payment history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's dashboard analytics
+router.get("/dashboard/analytics/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get current month's data
+    const currentMonth = new Date().getMonth() + 1;
+    const currentYear = new Date().getFullYear();
+    
+    // Monthly payment total
+    const [[monthlyPayment]] = await db.execute(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM payments 
+      WHERE tenant_id = ? AND MONTH(payment_date) = ? AND YEAR(payment_date) = ? AND status = 'completed'
+    `, [tenant_id, currentMonth, currentYear]);
+    
+    // Maintenance requests this month
+    const [[monthlyMaintenance]] = await db.execute(`
+      SELECT COUNT(*) as total
+      FROM maintenance_requests 
+      WHERE tenant_id = ? AND MONTH(created_at) = ? AND YEAR(created_at) = ?
+    `, [tenant_id, currentMonth, currentYear]);
+    
+    // Completed maintenance this month
+    const [[completedMaintenance]] = await db.execute(`
+      SELECT COUNT(*) as total
+      FROM maintenance_requests 
+      WHERE tenant_id = ? AND MONTH(updated_at) = ? AND YEAR(updated_at) = ? AND status = 'completed'
+    `, [tenant_id, currentMonth, currentYear]);
+    
+    // Unread messages
+    const [[unreadMessages]] = await db.execute(`
+      SELECT COUNT(*) as total
+      FROM messages 
+      WHERE receiver_id = ? AND is_read = 0
+    `, [tenant_id]);
+    
+    // Payment trend (last 6 months)
+    const [paymentTrend] = await db.execute(`
+      SELECT 
+        DATE_FORMAT(payment_date, '%Y-%m') as month,
+        SUM(amount) as total
+      FROM payments 
+      WHERE tenant_id = ? AND status = 'completed' AND payment_date >= DATE_SUB(NOW(), INTERVAL 6 MONTH)
+      GROUP BY DATE_FORMAT(payment_date, '%Y-%m')
+      ORDER BY month DESC
+    `, [tenant_id]);
+    
+    res.json({
+      current_month: {
+        payments: monthlyPayment.total,
+        maintenance_requests: monthlyMaintenance.total,
+        completed_maintenance: completedMaintenance.total,
+        unread_messages: unreadMessages.total
+      },
+      payment_trend: paymentTrend,
+      total_maintenance_requests: monthlyMaintenance.total,
+      total_payments: monthlyPayment.total
+    });
+  } catch (error) {
+    console.error('Error fetching dashboard analytics:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export { router as TenantPortalRouter };
