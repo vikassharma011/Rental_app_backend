@@ -961,7 +961,7 @@ router.post("/auto-pay", authenticateTenant, async (req, res) => {
   }
 });
 
-// Disable auto-pay
+// Disable auto-pay by setting ID
 router.put("/auto-pay/:settingId/disable", authenticateTenant, async (req, res) => {
   try {
     const { settingId } = req.params;
@@ -975,6 +975,61 @@ router.put("/auto-pay/:settingId/disable", authenticateTenant, async (req, res) 
     res.json({ message: "Auto-pay disabled successfully" });
   } catch (error) {
     console.error('Error disabling auto-pay:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Disable auto-pay by tenant ID and lease ID (more flexible)
+router.put("/auto-pay/disable", authenticateTenant, async (req, res) => {
+  try {
+    const { tenant_id, lease_id } = req.body;
+    
+    if (!tenant_id || !lease_id) {
+      return res.status(400).json({ error: "Missing tenant_id or lease_id" });
+    }
+
+    const [result] = await db.execute(`
+      UPDATE auto_pay_settings 
+      SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE tenant_id = ? AND lease_id = ?
+    `, [tenant_id, lease_id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "No auto-pay setting found for this tenant and lease" });
+    }
+
+    res.json({ message: "Auto-pay disabled successfully" });
+  } catch (error) {
+    console.error('Error disabling auto-pay:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Toggle auto-pay on/off
+router.put("/auto-pay/toggle", authenticateTenant, async (req, res) => {
+  try {
+    const { tenant_id, lease_id, enable } = req.body;
+    
+    if (!tenant_id || !lease_id || typeof enable !== 'boolean') {
+      return res.status(400).json({ error: "Missing required fields: tenant_id, lease_id, enable" });
+    }
+
+    const [result] = await db.execute(`
+      UPDATE auto_pay_settings 
+      SET is_active = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE tenant_id = ? AND lease_id = ?
+    `, [enable ? 1 : 0, tenant_id, lease_id]);
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "No auto-pay setting found for this tenant and lease" });
+    }
+
+    res.json({ 
+      message: `Auto-pay ${enable ? 'enabled' : 'disabled'} successfully`,
+      is_active: enable
+    });
+  } catch (error) {
+    console.error('Error toggling auto-pay:', error);
     res.status(500).json({ error: error.message });
   }
 });
