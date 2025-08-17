@@ -102,7 +102,7 @@ function authenticateTenant(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
   if (!token) return res.status(401).json({ success: false });
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'fallback-secret');
     if (decoded.role !== "tenant") {
       return res.status(403).json({ success: false, message: "Only tenants allowed" });
     }
@@ -113,7 +113,52 @@ function authenticateTenant(req, res, next) {
   }
 }
 
+// Test endpoint to verify routing is working
+router.get("/test", (req, res) => {
+  res.json({ 
+    message: "Tenant portal is working!", 
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      "/dashboard/:id",
+      "/profile/:id", 
+      "/maintenance/:id",
+      "/payments/:id",
+      "/payment-history/:id",
+      "/rent-status/:id",
+      "/auto-pay/:id",
+      "/reminders/:id",
+      "/settings/:id"
+    ]
+  });
+});
 
+// Health check endpoint
+router.get("/health", (req, res) => {
+  res.json({ 
+    status: "healthy", 
+    service: "tenant-portal",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Database test endpoint
+router.get("/db-test", async (req, res) => {
+  try {
+    const [result] = await db.execute('SELECT 1 as test, NOW() as timestamp');
+    res.json({ 
+      status: "database_connected", 
+      result: result[0],
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Database test failed:', error);
+    res.status(500).json({ 
+      status: "database_error", 
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
 
 // Get contacts for tenant messaging (investor and suppliers linked to tenant)
 router.get('/contacts/:userId', authenticateTenant, async (req, res) => {
@@ -1409,6 +1454,218 @@ router.get("/dashboard/analytics/:id", async (req, res) => {
     res.json({ analytics });
   } catch (error) {
     console.error('Error fetching dashboard analytics:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's rent status
+router.get("/rent-status/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get current rent status
+    const [rentStatus] = await executeWithRetry(`
+      SELECT 
+        l.lease_id,
+        l.rent_amount,
+        l.due_date,
+        l.late_fee,
+        l.late_fee_percentage,
+        l.grace_period_days,
+        p.title as property_title,
+        p.address,
+        rs.schedule_id,
+        rs.month_year,
+        rs.status as payment_status,
+        rs.due_date as schedule_due_date,
+        rs.amount as schedule_amount,
+        rs.late_fee_amount,
+        rs.total_due
+      FROM leases l
+      LEFT JOIN property p ON l.property_id = p.property_id
+      LEFT JOIN rent_schedules rs ON l.lease_id = rs.lease_id
+      WHERE l.tenant_id = ? 
+      AND l.end_date >= CURDATE()
+      AND (rs.month_year = DATE_FORMAT(CURDATE(), '%Y-%m') OR rs.month_year IS NULL)
+      ORDER BY l.start_date DESC
+      LIMIT 1
+    `, [tenant_id]);
+
+    if (rentStatus.length === 0) {
+      return res.json({ 
+        message: 'No active lease found',
+        rentStatus: null 
+      });
+    }
+
+    const status = rentStatus[0];
+    const today = new Date();
+    const dueDate = new Date(status.schedule_due_date || status.due_date);
+    const daysUntilDue = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+    
+    let rentStatusInfo = {
+      lease_id: status.lease_id,
+      property_title: status.property_title,
+      property_address: status.address,
+      rent_amount: status.rent_amount,
+      due_date: status.schedule_due_date || status.due_date,
+      days_until_due: daysUntilDue,
+      payment_status: status.payment_status || 'pending',
+      late_fee: status.late_fee,
+      late_fee_percentage: status.late_fee_percentage,
+      grace_period_days: status.grace_period_days,
+      is_overdue: daysUntilDue < 0,
+      is_due_soon: daysUntilDue <= 7 && daysUntilDue >= 0,
+      total_due: status.total_due || status.rent_amount
+    };
+
+    res.json({ rentStatus: rentStatusInfo });
+  } catch (error) {
+    console.error('Error fetching rent status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's auto-pay settings
+router.get("/auto-pay/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    const [autoPaySettings] = await executeWithRetry(`
+      SELECT 
+        aps.setting_id,
+        aps.lease_id,
+        aps.payment_method_id,
+        aps.is_active,
+        aps.auto_pay_date,
+        aps.created_at,
+        aps.updated_at,
+        tpm.payment_type,
+        tpm.card_last4,
+        tpm.bank_name,
+        tpm.account_number,
+        tpm.upi_id,
+        l.rent_amount,
+        p.title as property_title
+      FROM auto_pay_settings aps
+      LEFT JOIN tenant_payment_methods tpm ON aps.payment_method_id = tpm.method_id
+      LEFT JOIN leases l ON aps.lease_id = l.lease_id
+      LEFT JOIN property p ON l.property_id = p.property_id
+      WHERE aps.tenant_id = ?
+      ORDER BY aps.created_at DESC
+    `, [tenant_id]);
+
+    res.json({ autoPaySettings: autoPaySettings || [] });
+  } catch (error) {
+    console.error('Error fetching auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update tenant's auto-pay settings
+router.put("/auto-pay/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const { lease_id, payment_method_id, is_active, auto_pay_date } = req.body;
+    
+    // Check if setting already exists
+    const [existingSettings] = await executeWithRetry(`
+      SELECT setting_id FROM auto_pay_settings 
+      WHERE tenant_id = ? AND lease_id = ?
+    `, [tenant_id, lease_id]);
+
+    if (existingSettings.length > 0) {
+      // Update existing setting
+      await executeWithRetry(`
+        UPDATE auto_pay_settings 
+        SET 
+          payment_method_id = ?,
+          is_active = ?,
+          auto_pay_date = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE tenant_id = ? AND lease_id = ?
+      `, [payment_method_id, is_active, auto_pay_date, tenant_id, lease_id]);
+    } else {
+      // Create new setting
+      await executeWithRetry(`
+        INSERT INTO auto_pay_settings 
+        (tenant_id, lease_id, payment_method_id, is_active, auto_pay_date)
+        VALUES (?, ?, ?, ?, ?)
+      `, [tenant_id, lease_id, payment_method_id, is_active, auto_pay_date]);
+    }
+
+    res.json({ 
+      success: true, 
+      message: 'Auto-pay settings updated successfully' 
+    });
+  } catch (error) {
+    console.error('Error updating auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment history (enhanced version)
+router.get("/payment-history/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const limit = parseInt(req.query.limit) || 20;
+    const page = parseInt(req.query.page) || 1;
+    const offset = (page - 1) * limit;
+    
+    // Get total count
+    const [totalCount] = await executeWithRetry(`
+      SELECT COUNT(*) as total
+      FROM payments
+      WHERE tenant_id = ? AND payment_type = 'rent'
+    `, [tenant_id]);
+
+    // Get payments with pagination
+    const [payments] = await executeWithRetry(`
+      SELECT 
+        payment_id,
+        amount,
+        late_fee_amount,
+        total_amount,
+        payment_date,
+        due_date,
+        payment_method,
+        transaction_id,
+        status,
+        remarks,
+        created_at,
+        updated_at
+      FROM payments
+      WHERE tenant_id = ? AND payment_type = 'rent'
+      ORDER BY payment_date DESC
+      LIMIT ? OFFSET ?
+    `, [tenant_id, limit, offset]);
+
+    // Get payment statistics
+    const [stats] = await executeWithRetry(`
+      SELECT 
+        COUNT(*) as total_payments,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_payments,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_payments,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_payments,
+        SUM(amount) as total_amount,
+        AVG(amount) as average_amount,
+        SUM(late_fee_amount) as total_late_fees
+      FROM payments
+      WHERE tenant_id = ? AND payment_type = 'rent'
+    `, [tenant_id]);
+
+    res.json({ 
+      payments: payments || [],
+      pagination: {
+        total: totalCount[0]?.total || 0,
+        page,
+        limit,
+        totalPages: Math.ceil((totalCount[0]?.total || 0) / limit)
+      },
+      statistics: stats[0] || {}
+    });
+  } catch (error) {
+    console.error('Error fetching payment history:', error);
     res.status(500).json({ error: error.message });
   }
 });
