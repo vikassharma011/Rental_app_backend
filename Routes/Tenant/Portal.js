@@ -384,11 +384,17 @@ router.get("/payments/:id", async (req, res) => {
     console.log('Where clause:', whereClause);
     console.log('Params for count:', params);
 
-    // Get total count first
+    // Get total count first - ensure consistent parameter types
     const countQuery = `SELECT COUNT(*) as total FROM payments p ${whereClause}`;
     console.log('Count query:', countQuery);
     
-    const [[countResult]] = await executeWithRetry(countQuery, params);
+    const countParams = [
+      tenant_id.toString(),
+      ...(status ? [status] : []),
+      ...(payment_type ? [payment_type] : [])
+    ];
+    
+    const [[countResult]] = await executeWithRetry(countQuery, countParams);
     console.log('Count result:', countResult);
 
     const total = countResult.total;
@@ -436,8 +442,14 @@ router.get("/payments/:id", async (req, res) => {
       LIMIT ? OFFSET ?
     `;
     
-    // Ensure parameters are properly typed for MySQL
-    const finalParams = [...params, parseInt(limitNum), parseInt(offset)];
+    // Ensure parameters are properly typed for MySQL - convert all to strings for consistency
+    const finalParams = [
+      tenant_id.toString(), // Ensure tenant_id is string
+      ...(status ? [status] : []),
+      ...(payment_type ? [payment_type] : []),
+      limitNum.toString(), // Convert to string
+      offset.toString()    // Convert to string
+    ];
     
     console.log('Payments query:', paymentsQuery);
     console.log('Final params:', finalParams);
@@ -486,7 +498,7 @@ router.get("/rent-schedules/:id", authenticateTenant, async (req, res) => {
       WHERE l.tenant_id = ?
       ORDER BY rs.due_date DESC
     `, [tenant_id]);
-
+    
     res.json({ schedules });
   } catch (error) {
     console.error('Error fetching rent schedules:', error);
@@ -726,13 +738,13 @@ router.get("/maintenance/history/:id", async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
     
-    // Get total count
+    // Get total count - ensure consistent parameter types
     const [[countResult]] = await db.execute(
       "SELECT COUNT(*) as total FROM maintenance_requests WHERE tenant_id = ?",
-      [tenant_id]
+      [tenant_id.toString()]
     );
     
-    // Get paginated results
+    // Get paginated results - ensure consistent parameter types
     const [requests] = await db.execute(`
       SELECT 
         mr.*,
@@ -748,7 +760,7 @@ router.get("/maintenance/history/:id", async (req, res) => {
       WHERE mr.tenant_id = ?
       ORDER BY mr.created_at DESC
       LIMIT ? OFFSET ?
-    `, [tenant_id, limit, offset]);
+    `, [tenant_id.toString(), limit.toString(), offset.toString()]);
     
     res.json({ 
       requests,
@@ -788,13 +800,27 @@ router.get("/payments/history/:id", async (req, res) => {
       params.push(payment_type);
     }
     
-    // Get total count
+    // Get total count - ensure consistent parameter types
+    const countParams = [
+      tenant_id.toString(),
+      ...(status ? [status] : []),
+      ...(payment_type ? [payment_type] : [])
+    ];
+    
     const [[countResult]] = await db.execute(
       `SELECT COUNT(*) as total FROM payments p ${whereClause}`,
-      params
+      countParams
     );
     
-    // Get paginated results
+    // Get paginated results - ensure consistent parameter types
+    const finalParams = [
+      tenant_id.toString(),
+      ...(status ? [status] : []),
+      ...(payment_type ? [payment_type] : []),
+      limit.toString(),
+      offset.toString()
+    ];
+    
     const [payments] = await db.execute(`
       SELECT 
         p.*,
@@ -808,7 +834,7 @@ router.get("/payments/history/:id", async (req, res) => {
       ${whereClause}
       ORDER BY p.payment_date DESC
       LIMIT ? OFFSET ?
-    `, [...params, limit, offset]);
+    `, finalParams);
     
     res.json({ 
       payments,
