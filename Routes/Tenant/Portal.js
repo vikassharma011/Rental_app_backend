@@ -1670,4 +1670,92 @@ router.get("/payment-history/:id", async (req, res) => {
   }
 });
 
+// Process rent payment
+router.post("/rent-payment", async (req, res) => {
+  try {
+    const { tenant_id, lease_id, amount, payment_method, schedule_id, remarks, payment_intent_id } = req.body;
+    
+    // Validate required fields
+    if (!tenant_id || !lease_id || !amount) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    // Check if lease exists and is active
+    const [leaseCheck] = await executeWithRetry(`
+      SELECT l.*, p.title as property_title
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.lease_id = ? AND l.tenant_id = ?
+    `, [lease_id, tenant_id]);
+
+    if (leaseCheck.length === 0) {
+      return res.status(404).json({ error: 'Lease not found' });
+    }
+
+    const lease = leaseCheck[0];
+
+    // Generate transaction ID
+    const transactionId = `TXN_${Date.now()}_${tenant_id}`;
+
+    // Create payment record
+    const [paymentResult] = await executeWithRetry(`
+      INSERT INTO payments (
+        lease_id, 
+        tenant_id, 
+        amount, 
+        payment_method, 
+        transaction_id, 
+        remarks, 
+        payment_type, 
+        status, 
+        payment_date
+      ) VALUES (?, ?, ?, ?, ?, ?, 'rent', 'completed', CURDATE())
+    `, [lease_id, tenant_id, amount, payment_method, transactionId, remarks]);
+
+    const paymentId = paymentResult.insertId;
+
+    // Update rent schedule if schedule_id is provided
+    if (schedule_id) {
+      await executeWithRetry(`
+        UPDATE rent_schedules 
+        SET status = 'paid', payment_id = ?
+        WHERE schedule_id = ?
+      `, [paymentId, schedule_id]);
+    }
+
+    // Create rent schedule for current month if it doesn't exist
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    const [existingSchedule] = await executeWithRetry(`
+      SELECT schedule_id FROM rent_schedules 
+      WHERE lease_id = ? AND month_year = ?
+    `, [lease_id, currentMonth]);
+
+    if (existingSchedule.length === 0) {
+      await executeWithRetry(`
+        INSERT INTO rent_schedules (
+          lease_id, 
+          month_year, 
+          due_date, 
+          amount, 
+          status, 
+          payment_id
+        ) VALUES (?, ?, CURDATE(), ?, 'paid', ?)
+      `, [lease_id, currentMonth, amount, paymentId]);
+    }
+
+    res.json({ 
+      success: true,
+      message: 'Rent payment processed successfully',
+      payment_id: paymentId,
+      transaction_id: transactionId,
+      amount: amount,
+      payment_date: new Date().toISOString().split('T')[0]
+    });
+
+  } catch (error) {
+    console.error('Error processing rent payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 export { router as TenantPortalRouter };
