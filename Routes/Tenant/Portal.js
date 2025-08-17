@@ -851,6 +851,111 @@ router.get("/payments/history/:id", async (req, res) => {
   }
 });
 
+// Get tenant's reminders
+router.get("/reminders/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get upcoming rent due dates
+    const [rentReminders] = await db.execute(`
+      SELECT 
+        rs.schedule_id,
+        rs.due_date,
+        rs.amount,
+        l.rent_amount,
+        p.title as property_title,
+        p.address as property_address,
+        DATEDIFF(rs.due_date, CURDATE()) as days_until_due
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? 
+        AND rs.due_date >= CURDATE()
+        AND rs.due_date <= DATE_ADD(CURDATE(), INTERVAL 30 DAY)
+        AND rs.status = 'pending'
+      ORDER BY rs.due_date ASC
+      LIMIT 5
+    `, [tenant_id]);
+    
+    // Get maintenance reminders
+    const [maintenanceReminders] = await db.execute(`
+      SELECT 
+        mr.request_id,
+        mr.issue_description,
+        mr.status,
+        mr.created_at,
+        p.title as property_title,
+        DATEDIFF(CURDATE(), mr.created_at) as days_since_created
+      FROM maintenance_requests mr
+      JOIN property p ON mr.property_id = p.property_id
+      WHERE mr.tenant_id = ? 
+        AND mr.status IN ('pending', 'in_progress')
+        AND mr.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      ORDER BY mr.created_at DESC
+      LIMIT 3
+    `, [tenant_id]);
+    
+    // Get document reminders (if any documents need attention)
+    const [documentReminders] = await db.execute(`
+      SELECT 
+        d.document_id,
+        d.title,
+        d.description,
+        d.created_at,
+        p.title as property_title
+      FROM documents d
+      JOIN property p ON d.property_id = p.property_id
+      JOIN leases l ON p.property_id = l.property_id
+      WHERE l.tenant_id = ? 
+        AND d.visible_to_tenant = 1
+        AND d.created_at >= DATE_SUB(CURDATE(), INTERVAL 7 DAY)
+      ORDER BY d.created_at DESC
+      LIMIT 3
+    `, [tenant_id]);
+    
+    const reminders = [
+      ...rentReminders.map(r => ({
+        type: 'rent_due',
+        title: `Rent Due: ${r.property_title}`,
+        description: `Rent of ₹${r.amount} due on ${new Date(r.due_date).toLocaleDateString()}`,
+        due_date: r.due_date,
+        amount: r.amount,
+        days_until_due: r.days_until_due,
+        priority: r.days_until_due <= 7 ? 'high' : r.days_until_due <= 14 ? 'medium' : 'low'
+      })),
+      ...maintenanceReminders.map(m => ({
+        type: 'maintenance',
+        title: `Maintenance Update: ${m.property_title}`,
+        description: m.issue_description,
+        status: m.status,
+        days_since_created: m.days_since_created,
+        priority: m.status === 'pending' ? 'high' : 'medium'
+      })),
+      ...documentReminders.map(d => ({
+        type: 'document',
+        title: `New Document: ${d.title}`,
+        description: d.description || 'New document uploaded',
+        created_at: d.created_at,
+        priority: 'low'
+      }))
+    ];
+    
+    // Sort by priority and date
+    reminders.sort((a, b) => {
+      const priorityOrder = { high: 3, medium: 2, low: 1 };
+      if (priorityOrder[a.priority] !== priorityOrder[b.priority]) {
+        return priorityOrder[b.priority] - priorityOrder[a.priority];
+      }
+      return new Date(b.due_date || b.created_at) - new Date(a.due_date || a.created_at);
+    });
+    
+    res.json({ reminders });
+  } catch (error) {
+    console.error('Error fetching reminders:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's dashboard analytics
 router.get("/dashboard/analytics/:id", async (req, res) => {
   try {
