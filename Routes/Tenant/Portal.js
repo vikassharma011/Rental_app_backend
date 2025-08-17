@@ -696,19 +696,468 @@ router.get("/rent-schedules/:id", async (req, res) => {
   }
 });
 
-// Get tenant's payment methods
-router.get("/payment-methods/:id", async (req, res) => {
+// Enhanced Rent Payment APIs
+// Get tenant's rent status and current due amounts
+router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
   try {
     const tenant_id = req.params.id;
+    
+    // Get active lease and property details
+    const [[lease]] = await db.execute(`
+      SELECT 
+        l.*,
+        p.title as property_title,
+        p.address,
+        p.city,
+        p.state,
+        p.zip_code
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? AND l.end_date >= CURDATE()
+      ORDER BY l.start_date DESC
+      LIMIT 1
+    `, [tenant_id]);
+
+    if (!lease) {
+      return res.status(404).json({ error: "No active lease found" });
+    }
+
+    // Get current rent schedule
+    const [[currentSchedule]] = await db.execute(`
+      SELECT * FROM rent_schedules 
+      WHERE lease_id = ? AND status = 'pending'
+      ORDER BY due_date ASC
+      LIMIT 1
+    `);
+
+    if (!currentSchedule) {
+      return res.status(404).json({ error: "No pending rent schedule found" });
+    }
+
+    // Check if current month is already paid
+    const [[lastPayment]] = await db.execute(`
+      SELECT * FROM payments 
+      WHERE lease_id = ? AND payment_type = 'rent' 
+      AND MONTH(payment_date) = MONTH(CURDATE()) 
+      AND YEAR(payment_date) = YEAR(CURDATE())
+      ORDER BY payment_date DESC
+      LIMIT 1
+    `);
+
+    const isPaid = !!lastPayment;
+    let lateFeeAmount = 0;
+    let totalDue = currentSchedule.amount;
+
+    // Calculate late fees if overdue
+    if (!isPaid && currentSchedule.due_date < new Date()) {
+      const daysLate = Math.ceil((new Date() - new Date(currentSchedule.due_date)) / (1000 * 60 * 60 * 24));
+      const gracePeriod = lease.grace_period_days || 5;
+      
+      if (daysLate > gracePeriod) {
+        const lateFeePercentage = lease.late_fee_percentage || 5.00;
+        lateFeeAmount = (currentSchedule.amount * lateFeePercentage) / 100;
+        totalDue += lateFeeAmount;
+      }
+    }
+
+    res.json({
+      lease: {
+        lease_id: lease.lease_id,
+        property_title: lease.property_title,
+        address: lease.address,
+        city: lease.city,
+        state: lease.state,
+        zip_code: lease.zip_code,
+        start_date: lease.start_date,
+        end_date: lease.end_date,
+        rent_amount: lease.rent_amount,
+        due_date: lease.due_date,
+        late_fee_percentage: lease.late_fee_percentage,
+        grace_period_days: lease.grace_period_days
+      },
+      currentRent: {
+        schedule_id: currentSchedule.schedule_id,
+        due_date: currentSchedule.due_date,
+        amount: currentSchedule.amount,
+        status: currentSchedule.status
+      },
+      isPaid,
+      lateFeeAmount,
+      totalDue,
+      lastPayment: lastPayment ? {
+        amount: lastPayment.amount,
+        payment_date: lastPayment.payment_date,
+        payment_method: lastPayment.payment_method,
+        transaction_id: lastPayment.transaction_id
+      } : null
+    });
+  } catch (error) {
+    console.error('Error getting rent status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment methods
+router.get("/payment-methods/:id", authenticateTenant, async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
     const [methods] = await db.execute(`
       SELECT * FROM tenant_payment_methods 
       WHERE tenant_id = ? AND is_active = 1
-      ORDER BY is_default DESC
+      ORDER BY is_default DESC, created_at DESC
     `, [tenant_id]);
-    
+
     res.json({ methods });
   } catch (error) {
-    console.error('Error fetching payment methods:', error);
+    console.error('Error getting payment methods:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Add new payment method
+router.post("/payment-methods", authenticateTenant, async (req, res) => {
+  try {
+    const { tenant_id, payment_type, card_last4, bank_name, account_number, upi_id, is_default } = req.body;
+    
+    if (!tenant_id || !payment_type) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // If setting as default, unset other defaults
+    if (is_default) {
+      await db.execute(`
+        UPDATE tenant_payment_methods 
+        SET is_default = 0 
+        WHERE tenant_id = ?
+      `, [tenant_id]);
+    }
+
+    const [result] = await db.execute(`
+      INSERT INTO tenant_payment_methods (
+        tenant_id, payment_type, card_last4, bank_name, 
+        account_number, upi_id, is_default, is_active
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+    `, [tenant_id, payment_type, card_last4 || null, bank_name || null, 
+        account_number || null, upi_id || null, is_default || false]);
+
+    res.status(201).json({ 
+      message: "Payment method added successfully",
+      method_id: result.insertId 
+    });
+  } catch (error) {
+    console.error('Error adding payment method:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Update payment method
+router.put("/payment-methods/:methodId", authenticateTenant, async (req, res) => {
+  try {
+    const { methodId } = req.params;
+    const { payment_type, card_last4, bank_name, account_number, upi_id, is_default } = req.body;
+    
+    // If setting as default, unset other defaults for this tenant
+    if (is_default) {
+      const [[method]] = await db.execute(`
+        SELECT tenant_id FROM tenant_payment_methods WHERE method_id = ?
+      `, [methodId]);
+      
+      if (method) {
+        await db.execute(`
+          UPDATE tenant_payment_methods 
+          SET is_default = 0 
+          WHERE tenant_id = ? AND method_id != ?
+        `, [method.tenant_id, methodId]);
+      }
+    }
+
+    await db.execute(`
+      UPDATE tenant_payment_methods 
+      SET payment_type = ?, card_last4 = ?, bank_name = ?, 
+          account_number = ?, upi_id = ?, is_default = ?, updated_at = CURRENT_TIMESTAMP
+      WHERE method_id = ?
+    `, [payment_type, card_last4 || null, bank_name || null, 
+        account_number || null, upi_id || null, is_default || false, methodId]);
+
+    res.json({ message: "Payment method updated successfully" });
+  } catch (error) {
+    console.error('Error updating payment method:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete payment method
+router.delete("/payment-methods/:methodId", authenticateTenant, async (req, res) => {
+  try {
+    const { methodId } = req.params;
+    
+    await db.execute(`
+      UPDATE tenant_payment_methods 
+      SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE method_id = ?
+    `, [methodId]);
+
+    res.json({ message: "Payment method deleted successfully" });
+  } catch (error) {
+    console.error('Error deleting payment method:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get auto-pay settings
+router.get("/auto-pay/:id", authenticateTenant, async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    const [settings] = await db.execute(`
+      SELECT aps.*, tpm.payment_type, tpm.card_last4, tpm.bank_name, tpm.upi_id
+      FROM auto_pay_settings aps
+      JOIN tenant_payment_methods tpm ON aps.payment_method_id = tpm.method_id
+      WHERE aps.tenant_id = ? AND aps.is_active = 1
+      ORDER BY aps.created_at DESC
+    `, [tenant_id]);
+
+    res.json({ settings });
+  } catch (error) {
+    console.error('Error getting auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Setup/Update auto-pay
+router.post("/auto-pay", authenticateTenant, async (req, res) => {
+  try {
+    const { tenant_id, lease_id, payment_method_id, auto_pay_date, enable_notifications } = req.body;
+    
+    if (!tenant_id || !lease_id || !payment_method_id || !auto_pay_date) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Check if auto-pay already exists for this lease
+    const [[existing]] = await db.execute(`
+      SELECT setting_id FROM auto_pay_settings 
+      WHERE tenant_id = ? AND lease_id = ?
+    `, [tenant_id, lease_id]);
+
+    if (existing) {
+      // Update existing
+      await db.execute(`
+        UPDATE auto_pay_settings 
+        SET payment_method_id = ?, auto_pay_date = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE setting_id = ?
+      `, [payment_method_id, auto_pay_date, existing.setting_id]);
+    } else {
+      // Create new
+      await db.execute(`
+        INSERT INTO auto_pay_settings (
+          tenant_id, lease_id, payment_method_id, auto_pay_date, is_active
+        ) VALUES (?, ?, ?, ?, 1)
+      `, [tenant_id, lease_id, payment_method_id, auto_pay_date]);
+    }
+
+    res.json({ message: "Auto-pay setup successfully" });
+  } catch (error) {
+    console.error('Error setting up auto-pay:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Disable auto-pay
+router.put("/auto-pay/:settingId/disable", authenticateTenant, async (req, res) => {
+  try {
+    const { settingId } = req.params;
+    
+    await db.execute(`
+      UPDATE auto_pay_settings 
+      SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+      WHERE setting_id = ?
+    `, [settingId]);
+
+    res.json({ message: "Auto-pay disabled successfully" });
+  } catch (error) {
+    console.error('Error disabling auto-pay:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Enhanced rent payment with multiple payment methods
+router.post("/rent-payment", authenticateTenant, async (req, res) => {
+  try {
+    const { 
+      tenant_id, 
+      lease_id, 
+      amount, 
+      payment_method, 
+      schedule_id,
+      remarks,
+      payment_intent_id,
+      card_details
+    } = req.body;
+
+    if (!tenant_id || !lease_id || !amount || !payment_method) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    // Get lease details
+    const [[lease]] = await db.execute(`
+      SELECT * FROM leases WHERE lease_id = ? AND tenant_id = ?
+    `, [lease_id, tenant_id]);
+
+    if (!lease) {
+      return res.status(404).json({ error: "Lease not found" });
+    }
+
+    // Calculate late fees
+    let lateFeeAmount = 0;
+    let totalAmount = parseFloat(amount);
+    
+    if (schedule_id) {
+      const [[schedule]] = await db.execute(`
+        SELECT * FROM rent_schedules WHERE schedule_id = ?
+      `, [schedule_id]);
+
+      if (schedule && schedule.status === 'pending') {
+        const dueDate = new Date(schedule.due_date);
+        const today = new Date();
+        const gracePeriod = lease.grace_period_days || 5;
+        
+        if (today > dueDate) {
+          const daysLate = Math.ceil((today - dueDate) / (1000 * 60 * 60 * 24));
+          if (daysLate > gracePeriod) {
+            const lateFeePercentage = lease.late_fee_percentage || 5.00;
+            lateFeeAmount = (schedule.amount * lateFeePercentage) / 100;
+            totalAmount += lateFeeAmount;
+          }
+        }
+      }
+    }
+
+    // Generate transaction ID
+    const transactionId = payment_intent_id || 
+      `${payment_method.toUpperCase()}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+
+    // Insert payment record
+    const [paymentResult] = await db.execute(`
+      INSERT INTO payments (
+        lease_id, tenant_id, amount, late_fee_amount, total_amount, 
+        payment_type, payment_method, transaction_id, payment_date, 
+        due_date, remarks, status, gateway_response
+      ) VALUES (?, ?, ?, ?, ?, 'rent', ?, ?, CURDATE(), ?, ?, 'completed', ?)
+    `, [lease_id, tenant_id, amount, lateFeeAmount, totalAmount, 
+        payment_method, transactionId, new Date().toISOString().slice(0, 10), 
+        remarks || '', JSON.stringify({ payment_intent_id, card_details })]);
+
+    const paymentId = paymentResult.insertId;
+
+    // Update rent schedule status if schedule_id provided
+    if (schedule_id) {
+      await db.execute(`
+        UPDATE rent_schedules 
+        SET status = 'paid', payment_id = ?
+        WHERE schedule_id = ?
+      `, [paymentId, schedule_id]);
+    }
+
+    // Update lease payment status
+    await db.execute(`
+      UPDATE leases 
+      SET updated_at = CURRENT_TIMESTAMP
+      WHERE lease_id = ?
+    `, [lease_id]);
+
+    res.json({
+      message: "Rent payment processed successfully",
+      payment_id: paymentId,
+      transaction_id: transactionId,
+      amount: totalAmount,
+      late_fee_amount: lateFeeAmount
+    });
+  } catch (error) {
+    console.error('Error processing rent payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get payment history with pagination and filters
+router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    const { page = 1, limit = 10, status, payment_type } = req.query;
+    const offset = (page - 1) * limit;
+
+    let whereClause = "WHERE p.tenant_id = ?";
+    let params = [tenant_id];
+
+    if (status) {
+      whereClause += " AND p.status = ?";
+      params.push(status);
+    }
+
+    if (payment_type) {
+      whereClause += " AND p.payment_type = ?";
+      params.push(payment_type);
+    }
+
+    // Get total count
+    const [[countResult]] = await db.execute(`
+      SELECT COUNT(*) as total FROM payments p ${whereClause}
+    `, params);
+
+    const total = countResult.total;
+
+    // Get payments
+    const [payments] = await db.execute(`
+      SELECT 
+        p.*,
+        l.rent_amount,
+        rs.due_date as schedule_due_date
+      FROM payments p
+      LEFT JOIN leases l ON p.lease_id = l.lease_id
+      LEFT JOIN rent_schedules rs ON p.payment_id = rs.payment_id
+      ${whereClause}
+      ORDER BY p.payment_date DESC
+      LIMIT ? OFFSET ?
+    `, [...params, parseInt(limit), offset]);
+
+    res.json({
+      payments,
+      pagination: {
+        current_page: parseInt(page),
+        total_pages: Math.ceil(total / limit),
+        total_items: total,
+        items_per_page: parseInt(limit)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting payment history:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get rent schedules with payment status
+router.get("/rent-schedules/:id", authenticateTenant, async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    const [schedules] = await db.execute(`
+      SELECT 
+        rs.*,
+        l.rent_amount,
+        p.payment_id,
+        p.payment_date,
+        p.payment_method,
+        p.status as payment_status
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      LEFT JOIN payments p ON rs.payment_id = p.payment_id
+      WHERE l.tenant_id = ?
+      ORDER BY rs.due_date DESC
+    `, [tenant_id]);
+
+    res.json({ schedules });
+  } catch (error) {
+    console.error('Error fetching rent schedules:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -884,65 +1333,6 @@ router.use((error, req, res, next) => {
     return res.status(400).json({ error: error.message });
   }
   next();
-});
-
-// Get tenant's auto-pay settings
-router.get("/auto-pay/:id", async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const [settings] = await db.execute(`
-      SELECT 
-        aps.*,
-        l.rent_amount,
-        p.title as property_title
-      FROM auto_pay_settings aps
-      JOIN leases l ON aps.lease_id = l.lease_id
-      JOIN property p ON l.property_id = p.property_id
-      WHERE aps.tenant_id = ?
-    `, [tenant_id]);
-    
-    res.json({ settings });
-  } catch (error) {
-    console.error('Error fetching auto-pay settings:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update tenant's auto-pay settings
-router.put("/auto-pay/:id", authenticateTenant, async (req, res) => {
-  try {
-    const tenant_id = req.params.id;
-    const { lease_id, payment_method_id, is_active, auto_pay_date } = req.body;
-    
-    // Check if setting exists
-    const [[existing]] = await db.execute(
-      "SELECT * FROM auto_pay_settings WHERE tenant_id = ? AND lease_id = ?",
-      [tenant_id, lease_id]
-    );
-    
-    if (existing) {
-      // Update existing setting
-      await db.execute(
-        `UPDATE auto_pay_settings 
-         SET payment_method_id = ?, is_active = ?, auto_pay_date = ?, updated_at = CURRENT_TIMESTAMP
-         WHERE tenant_id = ? AND lease_id = ?`,
-        [payment_method_id, is_active, auto_pay_date, tenant_id, lease_id]
-      );
-    } else {
-      // Create new setting
-      await db.execute(
-        `INSERT INTO auto_pay_settings 
-         (tenant_id, lease_id, payment_method_id, is_active, auto_pay_date) 
-         VALUES (?, ?, ?, ?, ?)`,
-        [tenant_id, lease_id, payment_method_id, is_active, auto_pay_date]
-      );
-    }
-    
-    res.json({ success: true, message: "Auto-pay settings updated successfully" });
-  } catch (error) {
-    console.error('Error updating auto-pay settings:', error);
-    res.status(500).json({ error: error.message });
-  }
 });
 
 // Get tenant's maintenance request by ID with detailed information
