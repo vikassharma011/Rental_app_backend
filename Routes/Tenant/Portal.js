@@ -695,10 +695,27 @@ router.get("/rent-schedules/:id", async (req, res) => {
 });
 
 // Enhanced Rent Payment APIs
-// Get tenant's rent status and current due amounts
+// Get rent status for tenant
 router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
   try {
     const tenant_id = req.params.id;
+    
+    console.log('Rent Status Request for tenant:', tenant_id);
+    
+    // First check if tenant exists
+    const [[tenant]] = await db.execute(`
+      SELECT * FROM tenants WHERE tenant_id = ?
+    `, [tenant_id]);
+
+    if (!tenant) {
+      return res.status(404).json({ 
+        error: "Tenant not found",
+        details: `No tenant found with ID ${tenant_id}`,
+        suggestion: "Please verify the tenant ID exists in the system"
+      });
+    }
+
+    console.log('Tenant found:', { tenant_id: tenant.tenant_id, name: tenant.first_name + ' ' + tenant.last_name });
     
     // Get active lease and property details
     const [[lease]] = await db.execute(`
@@ -717,8 +734,19 @@ router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
     `, [tenant_id]);
 
     if (!lease) {
-      return res.status(404).json({ error: "No active lease found" });
+      return res.status(404).json({ 
+        error: "No active lease found",
+        details: `Tenant ${tenant.first_name} ${tenant.last_name} (ID: ${tenant_id}) has no active lease`,
+        suggestion: "Check if the lease has expired or if there's an issue with the lease dates",
+        tenant_info: {
+          tenant_id: tenant.tenant_id,
+          name: `${tenant.first_name} ${tenant.last_name}`,
+          email: tenant.email
+        }
+      });
     }
+
+    console.log('Active lease found:', { lease_id: lease.lease_id, property: lease.property_title });
 
     // Get current rent schedule
     const [[currentSchedule]] = await db.execute(`
@@ -729,8 +757,20 @@ router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
     `, [lease.lease_id]);
 
     if (!currentSchedule) {
-      return res.status(404).json({ error: "No pending rent schedule found" });
+      return res.status(404).json({ 
+        error: "No pending rent schedule found",
+        details: `No pending rent schedule found for lease ID ${lease.lease_id}`,
+        suggestion: "All rent schedules may have been paid or there's an issue with the schedule",
+        lease_info: {
+          lease_id: lease.lease_id,
+          property: lease.property_title,
+          start_date: lease.start_date,
+          end_date: lease.end_date
+        }
+      });
     }
+
+    console.log('Current rent schedule found:', { schedule_id: currentSchedule.schedule_id, amount: currentSchedule.amount });
 
     // Check if current month is already paid by looking at payments table
     const [[lastPayment]] = await db.execute(`
@@ -755,10 +795,11 @@ router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
         const lateFeePercentage = lease.late_fee_percentage || 5.00;
         lateFeeAmount = (currentSchedule.amount * lateFeePercentage) / 100;
         totalDue += lateFeeAmount;
+        console.log('Late fee calculated:', { daysLate, gracePeriod, lateFeePercentage, lateFeeAmount, totalDue });
       }
     }
 
-    res.json({
+    const response = {
       lease: {
         lease_id: lease.lease_id,
         property_title: lease.property_title,
@@ -788,10 +829,19 @@ router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
         payment_method: lastPayment.payment_method,
         transaction_id: lastPayment.transaction_id
       } : null
-    });
+    };
+
+    console.log('Rent status response prepared:', response);
+    res.json(response);
+    
   } catch (error) {
     console.error('Error getting rent status:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: "Failed to get rent status",
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
@@ -1144,6 +1194,16 @@ router.post("/rent-payment", authenticateTenant, async (req, res) => {
     };
 
     console.log('Payment successful, sending response:', response);
+    
+    // Send email notification
+    try {
+      await sendPaymentConfirmationEmail(tenant_id, paymentId, totalAmount, transactionId, payment_method);
+      console.log('Payment confirmation email sent successfully');
+    } catch (emailError) {
+      console.error('Failed to send payment confirmation email:', emailError);
+      // Don't fail the payment if email fails
+    }
+    
     res.json(response);
     
   } catch (error) {
@@ -1689,5 +1749,92 @@ router.get("/dashboard/analytics/:id", async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+// Email notification function for payment confirmation
+async function sendPaymentConfirmationEmail(tenant_id, payment_id, amount, transaction_id, payment_method) {
+  try {
+    // Get tenant details
+    const [[tenant]] = await db.execute(`
+      SELECT first_name, last_name, email FROM tenants WHERE tenant_id = ?
+    `, [tenant_id]);
+
+    if (!tenant) {
+      console.error('Tenant not found for email notification');
+      return;
+    }
+
+    // Get payment details
+    const [[payment]] = await db.execute(`
+      SELECT p.*, l.rent_amount, prop.title as property_title
+      FROM payments p
+      JOIN leases l ON p.lease_id = l.lease_id
+      JOIN property prop ON l.property_id = prop.property_id
+      WHERE p.payment_id = ?
+    `, [payment_id]);
+
+    if (!payment) {
+      console.error('Payment not found for email notification');
+      return;
+    }
+
+    // For now, just log the email details (you can integrate with actual email service later)
+    const emailData = {
+      to: tenant.email,
+      subject: 'Rent Payment Confirmation',
+      tenant_name: `${tenant.first_name} ${tenant.last_name}`,
+      payment_amount: amount,
+      transaction_id: transaction_id,
+      payment_method: payment_method,
+      payment_date: new Date().toLocaleDateString('en-IN'),
+      property: payment.property_title,
+      payment_id: payment_id
+    };
+
+    console.log('📧 Payment Confirmation Email Details:');
+    console.log('To:', emailData.to);
+    console.log('Subject:', emailData.subject);
+    console.log('Tenant:', emailData.tenant_name);
+    console.log('Amount:', `₹${emailData.payment_amount}`);
+    console.log('Transaction ID:', emailData.transaction_id);
+    console.log('Payment Method:', emailData.payment_method);
+    console.log('Property:', emailData.property);
+
+    // TODO: Integrate with actual email service (SendGrid, Nodemailer, etc.)
+    // For now, we'll just log the email content
+    const emailContent = `
+Dear ${emailData.tenant_name},
+
+Thank you for your rent payment!
+
+Payment Details:
+- Amount: ₹${emailData.payment_amount}
+- Transaction ID: ${emailData.transaction_id}
+- Payment Method: ${emailData.payment_method}
+- Date: ${emailData.payment_date}
+- Property: ${emailData.property}
+- Payment ID: ${emailData.payment_id}
+
+Your payment has been processed successfully. Please keep this confirmation for your records.
+
+Best regards,
+Rental Management Team
+    `;
+
+    console.log('📧 Email Content:');
+    console.log(emailContent);
+
+    // In a real implementation, you would send this email using a service like:
+    // - SendGrid
+    // - Nodemailer
+    // - AWS SES
+    // - Mailgun
+    
+    return true;
+    
+  } catch (error) {
+    console.error('Error sending payment confirmation email:', error);
+    throw error;
+  }
+}
 
 export { router as TenantPortalRouter };
