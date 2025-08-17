@@ -956,6 +956,210 @@ router.get("/reminders/:id", async (req, res) => {
   }
 });
 
+// Get tenant's rent status
+router.get("/rent-status/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get current lease and rent status
+    const [leaseData] = await db.execute(`
+      SELECT 
+        l.lease_id,
+        l.rent_amount,
+        l.due_date,
+        l.start_date,
+        l.end_date,
+        p.title as property_title,
+        p.address as property_address,
+        DATEDIFF(l.due_date, CURDATE()) as days_until_due,
+        CASE 
+          WHEN l.due_date < CURDATE() THEN 'overdue'
+          WHEN l.due_date = CURDATE() THEN 'due_today'
+          WHEN DATEDIFF(l.due_date, CURDATE()) <= 7 THEN 'due_soon'
+          ELSE 'upcoming'
+        END as rent_status
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? AND l.status = 'active'
+      ORDER BY l.start_date DESC
+      LIMIT 1
+    `, [tenant_id]);
+    
+    if (leaseData.length === 0) {
+      return res.json({ 
+        has_active_lease: false,
+        message: 'No active lease found'
+      });
+    }
+    
+    const lease = leaseData[0];
+    
+    // Get next rent schedule
+    const [nextRentSchedule] = await db.execute(`
+      SELECT 
+        rs.schedule_id,
+        rs.due_date,
+        rs.amount,
+        rs.status
+      FROM rent_schedules rs
+      WHERE rs.lease_id = ? 
+        AND rs.due_date >= CURDATE()
+        AND rs.status = 'pending'
+      ORDER BY rs.due_date ASC
+      LIMIT 1
+    `, [lease.lease_id]);
+    
+    // Get last payment
+    const [lastPayment] = await db.execute(`
+      SELECT 
+        p.payment_id,
+        p.amount,
+        p.payment_date,
+        p.status
+      FROM payments p
+      WHERE p.tenant_id = ? AND p.status = 'completed'
+      ORDER BY p.payment_date DESC
+      LIMIT 1
+    `, [tenant_id]);
+    
+    res.json({
+      has_active_lease: true,
+      lease: {
+        lease_id: lease.lease_id,
+        rent_amount: lease.rent_amount,
+        due_date: lease.due_date,
+        start_date: lease.start_date,
+        end_date: lease.end_date,
+        property_title: lease.property_title,
+        property_address: lease.property_address,
+        days_until_due: lease.days_until_due,
+        rent_status: lease.rent_status
+      },
+      next_rent_schedule: nextRentSchedule.length > 0 ? nextRentSchedule[0] : null,
+      last_payment: lastPayment.length > 0 ? lastPayment[0] : null
+    });
+  } catch (error) {
+    console.error('Error fetching rent status:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's payment methods
+router.get("/payment-methods/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get saved payment methods
+    const [paymentMethods] = await db.execute(`
+      SELECT 
+        pm.method_id,
+        pm.payment_type,
+        pm.payment_method,
+        pm.card_last_four,
+        pm.card_brand,
+        pm.is_default,
+        pm.created_at
+      FROM payment_methods pm
+      WHERE pm.tenant_id = ? AND pm.is_active = 1
+      ORDER BY pm.is_default DESC, pm.created_at DESC
+    `, [tenant_id]);
+    
+    res.json({ methods: paymentMethods });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's auto-pay settings
+router.get("/auto-pay/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get auto-pay settings
+    const [autoPaySettings] = await db.execute(`
+      SELECT 
+        ap.setting_id,
+        ap.payment_method_id,
+        ap.amount,
+        ap.frequency,
+        ap.next_payment_date,
+        ap.is_active,
+        ap.created_at,
+        pm.payment_type,
+        pm.payment_method
+      FROM auto_pay_settings ap
+      LEFT JOIN payment_methods pm ON ap.payment_method_id = pm.method_id
+      WHERE ap.tenant_id = ? AND ap.is_active = 1
+      ORDER BY ap.created_at DESC
+    `, [tenant_id]);
+    
+    res.json({ settings: autoPaySettings });
+  } catch (error) {
+    console.error('Error fetching auto-pay settings:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's rent schedules
+router.get("/rent-schedules/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get rent schedules
+    const [rentSchedules] = await db.execute(`
+      SELECT 
+        rs.schedule_id,
+        rs.lease_id,
+        rs.due_date,
+        rs.amount,
+        rs.status,
+        rs.created_at,
+        l.rent_amount,
+        p.title as property_title
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ?
+      ORDER BY rs.due_date DESC
+      LIMIT 12
+    `, [tenant_id]);
+    
+    res.json({ schedules: rentSchedules });
+  } catch (error) {
+    console.error('Error fetching rent schedules:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get tenant's notifications
+router.get("/notifications/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    // Get notifications
+    const [notifications] = await db.execute(`
+      SELECT 
+        n.notification_id,
+        n.title,
+        n.message,
+        n.type,
+        n.is_read,
+        n.created_at,
+        n.priority
+      FROM notifications n
+      WHERE n.tenant_id = ? AND n.is_active = 1
+      ORDER BY n.created_at DESC
+      LIMIT 20
+    `, [tenant_id]);
+    
+    res.json({ notifications });
+  } catch (error) {
+    console.error('Error fetching notifications:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's dashboard analytics
 router.get("/dashboard/analytics/:id", async (req, res) => {
   try {
