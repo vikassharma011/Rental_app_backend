@@ -1760,6 +1760,37 @@ router.get("/auto-pay/:id", async (req, res) => {
   }
 });
 
+// Get tenant's leases
+router.get("/leases/:id", async (req, res) => {
+  try {
+    const tenant_id = req.params.id;
+    
+    const [leases] = await executeWithRetry(`
+      SELECT 
+        l.*,
+        p.title as property_title,
+        p.address as property_address,
+        p.city,
+        p.state,
+        p.zip_code,
+        CASE 
+          WHEN l.end_date < CURDATE() THEN 'expired'
+          WHEN l.start_date > CURDATE() THEN 'upcoming'
+          ELSE 'active'
+        END as lease_status
+      FROM leases l
+      LEFT JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ?
+      ORDER BY l.start_date DESC
+    `, [tenant_id]);
+    
+    res.json({ leases });
+  } catch (error) {
+    console.error('Error fetching leases:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's rent schedules with actual data
 router.get("/rent-schedules/:id", async (req, res) => {
   try {
