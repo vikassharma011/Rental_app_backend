@@ -728,21 +728,21 @@ router.get("/rent-status/:id", authenticateTenant, async (req, res) => {
       WHERE lease_id = ? AND status = 'pending'
       ORDER BY due_date ASC
       LIMIT 1
-    `);
+    `, [lease.lease_id]);
 
     if (!currentSchedule) {
       return res.status(404).json({ error: "No pending rent schedule found" });
     }
 
-    // Check if current month is already paid
+    // Check if current month is already paid by looking at payments table
     const [[lastPayment]] = await db.execute(`
       SELECT * FROM payments 
-      WHERE lease_id = ? AND payment_type = 'rent' 
+      WHERE lease_id = ? AND tenant_id = ? AND payment_type = 'rent' 
       AND MONTH(payment_date) = MONTH(CURDATE()) 
       AND YEAR(payment_date) = YEAR(CURDATE())
       ORDER BY payment_date DESC
       LIMIT 1
-    `);
+    `, [lease.lease_id, tenant_id]);
 
     const isPaid = !!lastPayment;
     let lateFeeAmount = 0;
@@ -1106,15 +1106,17 @@ router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
 
     const total = countResult.total;
 
-    // Get payments
+    // Get payments with proper joins
     const [payments] = await db.execute(`
       SELECT 
         p.*,
         l.rent_amount,
-        rs.due_date as schedule_due_date
+        rs.due_date as schedule_due_date,
+        rs.month_year
       FROM payments p
       LEFT JOIN leases l ON p.lease_id = l.lease_id
-      LEFT JOIN rent_schedules rs ON p.payment_id = rs.payment_id
+      LEFT JOIN rent_schedules rs ON rs.lease_id = p.lease_id 
+        AND rs.month_year = DATE_FORMAT(p.payment_date, '%Y-%m')
       ${whereClause}
       ORDER BY p.payment_date DESC
       LIMIT ? OFFSET ?
@@ -1147,10 +1149,13 @@ router.get("/rent-schedules/:id", authenticateTenant, async (req, res) => {
         p.payment_id,
         p.payment_date,
         p.payment_method,
-        p.status as payment_status
+        p.status as payment_status,
+        p.amount as payment_amount
       FROM rent_schedules rs
       JOIN leases l ON rs.lease_id = l.lease_id
-      LEFT JOIN payments p ON rs.payment_id = p.payment_id
+      LEFT JOIN payments p ON p.lease_id = rs.lease_id 
+        AND p.payment_type = 'rent'
+        AND rs.month_year = DATE_FORMAT(p.payment_date, '%Y-%m')
       WHERE l.tenant_id = ?
       ORDER BY rs.due_date DESC
     `, [tenant_id]);
