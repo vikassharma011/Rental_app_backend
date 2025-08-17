@@ -1137,7 +1137,15 @@ router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
   try {
     const tenant_id = req.params.id;
     const { page = 1, limit = 10, status, payment_type } = req.query;
-    const offset = (page - 1) * limit;
+    
+    console.log('Payment History Request:', { tenant_id, page, limit, status, payment_type });
+    
+    // Validate and sanitize parameters
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 10)); // Max 100 items
+    const offset = (pageNum - 1) * limitNum;
+
+    console.log('Sanitized params:', { pageNum, limitNum, offset });
 
     let whereClause = "WHERE p.tenant_id = ?";
     let params = [tenant_id];
@@ -1152,17 +1160,51 @@ router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
       params.push(payment_type);
     }
 
-    // Get total count
-    const [[countResult]] = await db.execute(`
-      SELECT COUNT(*) as total FROM payments p ${whereClause}
-    `, params);
+    console.log('Where clause:', whereClause);
+    console.log('Params for count:', params);
+
+    // Get total count first
+    const countQuery = `SELECT COUNT(*) as total FROM payments p ${whereClause}`;
+    console.log('Count query:', countQuery);
+    
+    const [[countResult]] = await db.execute(countQuery, params);
+    console.log('Count result:', countResult);
 
     const total = countResult.total;
 
-    // Get payments with simplified joins
-    const [payments] = await db.execute(`
+    // If no payments found, return empty result
+    if (total === 0) {
+      console.log('No payments found, returning empty result');
+      return res.json({
+        payments: [],
+        pagination: {
+          current_page: pageNum,
+          total_pages: 0,
+          total_items: 0,
+          items_per_page: limitNum
+        }
+      });
+    }
+
+    // Get payments with proper parameter handling
+    const paymentsQuery = `
       SELECT 
-        p.*,
+        p.payment_id,
+        p.lease_id,
+        p.tenant_id,
+        p.amount,
+        p.late_fee_amount,
+        p.total_amount,
+        p.payment_date,
+        p.due_date,
+        p.remarks,
+        p.receipt_url,
+        p.payment_type,
+        p.payment_method,
+        p.transaction_id,
+        p.status,
+        p.created_at,
+        p.updated_at,
         l.rent_amount,
         l.start_date as lease_start_date,
         l.end_date as lease_end_date
@@ -1171,20 +1213,35 @@ router.get("/payment-history/:id", authenticateTenant, async (req, res) => {
       ${whereClause}
       ORDER BY p.payment_date DESC
       LIMIT ? OFFSET ?
-    `, [...params, parseInt(limit), offset]);
+    `;
+    
+    console.log('Payments query:', paymentsQuery);
+    console.log('Final params:', [...params, limitNum, offset]);
 
-    res.json({
+    const [payments] = await db.execute(paymentsQuery, [...params, limitNum, offset]);
+    console.log('Payments result count:', payments.length);
+
+    const response = {
       payments,
       pagination: {
-        current_page: parseInt(page),
-        total_pages: Math.ceil(total / limit),
+        current_page: pageNum,
+        total_pages: Math.ceil(total / limitNum),
         total_items: total,
-        items_per_page: parseInt(limit)
+        items_per_page: limitNum
       }
-    });
+    };
+
+    console.log('Sending response:', response);
+    res.json(response);
+    
   } catch (error) {
     console.error('Error getting payment history:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error stack:', error.stack);
+    res.status(500).json({ 
+      error: "Failed to fetch payment history",
+      details: error.message,
+      stack: error.stack
+    });
   }
 });
 
