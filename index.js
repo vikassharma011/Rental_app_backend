@@ -60,43 +60,69 @@ io.on('connection', (socket) => {
   });
 });
 
+// Safer, dynamic CORS allow-list (includes Netlify domains)
+const staticAllowedOrigins = new Set([
+  "http://localhost:3000",
+  "https://localhost:3000",
+  "http://127.0.0.1:3000",
+  "https://127.0.0.1:3000",
+  "https://artistic-wonder-production-a4f8.up.railway.app"
+]);
+
+const envAllowed = (process.env.ALLOWED_ORIGINS || "")
+  .split(",")
+  .map((s) => s.trim())
+  .filter(Boolean);
+envAllowed.forEach((o) => staticAllowedOrigins.add(o));
+
+const isAllowedOrigin = (origin) => {
+  if (!origin) return true; // same-origin or non-browser
+  if (staticAllowedOrigins.has(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    // Allow any Netlify app domain
+    if (hostname.endsWith(".netlify.app")) return true;
+  } catch (_) {
+    return false;
+  }
+  return false;
+};
+
 app.use(cors({
-  origin: [
-    "http://localhost:3000",
-    "https://localhost:3000",
-    "http://127.0.0.1:3000",
-    "https://127.0.0.1:3000",
-    "https://artistic-wonder-production-a4f8.up.railway.app",
-    "*"
-  ],
+  origin: (origin, callback) => {
+    if (isAllowedOrigin(origin)) return callback(null, true);
+    return callback(new Error("Not allowed by CORS"));
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
   allowedHeaders: [
-    "Content-Type", 
-    "Authorization", 
+    "Content-Type",
+    "Authorization",
     "X-Requested-With",
     "Accept",
     "Origin"
   ],
   preflightContinue: false,
-  optionsSuccessStatus: 200
+  optionsSuccessStatus: 200,
 }));
 
 // Handle preflight requests
 app.options('*', cors());
 
-// Add CORS headers to all responses
+// Add CORS headers to all responses (reflect only allowed origins)
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
+  const origin = req.headers.origin;
+  if (isAllowedOrigin(origin)) {
+    res.header('Access-Control-Allow-Origin', origin || '');
+    res.header('Vary', 'Origin');
+  }
   res.header('Access-Control-Allow-Credentials', 'true');
   res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
   res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-  
   if (req.method === 'OPTIONS') {
-    res.sendStatus(200);
-  } else {
-    next();
+    return res.sendStatus(200);
   }
+  next();
 });
 
 app.use(express.json());
