@@ -160,6 +160,20 @@ router.get("/db-test", async (req, res) => {
   }
 });
 
+// Upload maintenance photo
+router.post("/maintenance/upload-photo/:tenantId", upload.single('photo'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+    const fileUrl = `/uploads/maintenance-photos/${req.file.filename}`;
+    res.json({ success: true, file_url: fileUrl });
+  } catch (error) {
+    console.error('Photo upload error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get contacts for tenant messaging (investor and suppliers linked to tenant)
 router.get('/contacts/:userId', authenticateTenant, async (req, res) => {
   try {
@@ -182,6 +196,47 @@ router.get('/contacts/:userId', authenticateTenant, async (req, res) => {
     const [investors] = await db.execute(investorSQL, investorParams);
 
     // Get suppliers who have worked on tenant's property
+    let supplierSQL = `
+      SELECT DISTINCT s.user_id AS id, CONCAT(s.first_name, ' ', s.last_name) AS name, 'supplier' AS role
+      FROM users s
+      JOIN maintenance_requests m ON s.user_id = m.supplier_id
+      JOIN leases l ON m.property_id = l.property_id
+      WHERE l.tenant_id = ? AND s.is_active = 1
+    `;
+    let supplierParams = [userId];
+    if (search) {
+      supplierSQL += ' AND (s.first_name LIKE ? OR s.last_name LIKE ? OR s.email LIKE ?)';
+      supplierParams.push(search, search, search);
+    }
+    const [suppliers] = await db.execute(supplierSQL, supplierParams);
+
+    const contacts = [...investors, ...suppliers];
+    res.json({ contacts });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Alias: contacts under messaging namespace for frontend compatibility
+router.get('/messaging/contacts/:userId', authenticateTenant, async (req, res) => {
+  try {
+    const userId = req.params.userId;
+    const search = req.query.search ? `%${req.query.search}%` : null;
+
+    let investorSQL = `
+      SELECT i.user_id AS id, CONCAT(i.first_name, ' ', i.last_name) AS name, 'investor' AS role
+      FROM users i
+      JOIN property p ON i.user_id = p.investor_id
+      JOIN leases l ON p.property_id = l.property_id
+      WHERE l.tenant_id = ? AND i.is_active = 1
+    `;
+    let investorParams = [userId];
+    if (search) {
+      investorSQL += ' AND (i.first_name LIKE ? OR i.last_name LIKE ? OR i.email LIKE ?)';
+      investorParams.push(search, search, search);
+    }
+    const [investors] = await db.execute(investorSQL, investorParams);
+
     let supplierSQL = `
       SELECT DISTINCT s.user_id AS id, CONCAT(s.first_name, ' ', s.last_name) AS name, 'supplier' AS role
       FROM users s
@@ -265,6 +320,39 @@ router.get("/dashboard/:id", async (req, res) => {
   }
 });
 
+// Dashboard analytics for tenant (basic stats)
+router.get("/dashboard/analytics/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+
+    const [[paymentsStats]] = await executeWithRetry(`
+      SELECT 
+        COUNT(*) as total_payments,
+        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed_payments,
+        SUM(amount) as total_amount
+      FROM payments WHERE tenant_id = ? AND payment_type='rent'
+    `, [tenant_id]);
+
+    const [[maintenanceStats]] = await executeWithRetry(`
+      SELECT 
+        SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) as open_requests,
+        SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) as completed_requests
+      FROM maintenance_requests WHERE tenant_id = ?
+    `, [tenant_id]);
+
+    res.json({
+      payments: paymentsStats || {},
+      maintenance: maintenanceStats || {}
+    });
+  } catch (error) {
+    console.error('Dashboard analytics error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get/update tenant profile
 router.get("/profile/:id", async (req, res) => {
   try {
@@ -321,6 +409,48 @@ router.get("/documents/:id", async (req, res) => {
     res.json({ documents: docs });
   } catch (error) {
     console.error('Documents fetch error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Leases list for tenant
+router.get("/leases/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+    const [leases] = await executeWithRetry(`
+      SELECT l.*, p.title as property_title, p.address as property_address, p.city, p.state
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ?
+      ORDER BY l.start_date DESC
+    `, [tenant_id]);
+    res.json({ leases: leases || [] });
+  } catch (error) {
+    console.error('Error fetching leases:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Single lease by lease_id
+router.get("/lease/:leaseId", async (req, res) => {
+  try {
+    const leaseId = parseInt(req.params.leaseId);
+    if (isNaN(leaseId)) {
+      return res.status(400).json({ error: 'Invalid lease ID' });
+    }
+    const [[lease]] = await executeWithRetry(`
+      SELECT l.*, p.title as property_title, p.address as property_address, p.city, p.state
+      FROM leases l
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.lease_id = ?
+      LIMIT 1
+    `, [leaseId]);
+    res.json({ lease: lease || null });
+  } catch (error) {
+    console.error('Error fetching lease:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -741,6 +871,54 @@ router.get("/rent-status/:id", async (req, res) => {
   }
 });
 
+// Tenant reminders (placeholder: build from rent_schedules and messages)
+router.get("/reminders/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+
+    const [upcomingSchedules] = await executeWithRetry(`
+      SELECT rs.due_date, rs.amount, p.title as property_title
+      FROM rent_schedules rs
+      JOIN leases l ON rs.lease_id = l.lease_id
+      JOIN property p ON l.property_id = p.property_id
+      WHERE l.tenant_id = ? AND rs.status IN ('pending','due') AND rs.due_date >= CURDATE()
+      ORDER BY rs.due_date ASC
+      LIMIT 5
+    `, [tenant_id]);
+
+    const [unreadMessages] = await executeWithRetry(`
+      SELECT m.created_at, CONCAT(u.first_name, ' ', u.last_name) as from_name
+      FROM messages m
+      JOIN users u ON m.sender_id = u.user_id
+      WHERE m.receiver_id = ? AND m.is_read = 0
+      ORDER BY m.created_at DESC
+      LIMIT 5
+    `, [tenant_id]);
+
+    const reminders = [
+      ...upcomingSchedules.map(s => ({
+        type: 'rent_due',
+        title: `Rent due for ${s.property_title}`,
+        date: s.due_date,
+        amount: s.amount
+      })),
+      ...unreadMessages.map(m => ({
+        type: 'message',
+        title: `New message from ${m.from_name}`,
+        date: m.created_at
+      }))
+    ];
+
+    res.json({ reminders });
+  } catch (error) {
+    console.error('Error fetching reminders:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's auto-pay settings
 router.get("/auto-pay/:id", async (req, res) => {
   try {
@@ -893,6 +1071,42 @@ router.get("/notifications/:id", async (req, res) => {
   }
 });
 
+// Unread count for messaging
+router.get("/messaging/unread/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+    const [[{ unread }]] = await executeWithRetry(
+      `SELECT COUNT(*) as unread FROM messages WHERE receiver_id = ? AND is_read = 0`,
+      [tenant_id]
+    );
+    res.json({ unread });
+  } catch (error) {
+    console.error('Error getting unread count:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Mark messages as read for tenant
+router.post("/messaging/read/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+    await executeWithRetry(
+      `UPDATE messages SET is_read = 1, updated_at = CURRENT_TIMESTAMP WHERE receiver_id = ? AND is_read = 0`,
+      [tenant_id]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error marking messages as read:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's rent schedules
 router.get("/rent-schedules/:id", async (req, res) => {
   try {
@@ -922,6 +1136,38 @@ router.get("/rent-schedules/:id", async (req, res) => {
   }
 });
 
+// Tenant inventory items (basic placeholder - align with your schema if different)
+router.get("/inventory/:id", async (req, res) => {
+  try {
+    const tenant_id = parseInt(req.params.id);
+    if (isNaN(tenant_id)) {
+      return res.status(400).json({ error: 'Invalid tenant ID' });
+    }
+
+    // Determine property by latest lease
+    const [[lease]] = await executeWithRetry(
+      `SELECT property_id FROM leases WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1`,
+      [tenant_id]
+    );
+    if (!lease) return res.json({ inventory: [] });
+
+    // If you have a property_inventory table use it, otherwise return empty list
+    try {
+      const [items] = await executeWithRetry(
+        `SELECT * FROM property_inventory WHERE property_id = ? ORDER BY created_at DESC`,
+        [lease.property_id]
+      );
+      res.json({ inventory: items || [] });
+    } catch (innerErr) {
+      console.warn('Inventory table missing or query failed, returning empty list');
+      res.json({ inventory: [] });
+    }
+  } catch (error) {
+    console.error('Error fetching tenant inventory:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get tenant's payment history (enhanced version)
 router.get("/payment-history/:id", async (req, res) => {
   try {
@@ -936,56 +1182,77 @@ router.get("/payment-history/:id", async (req, res) => {
     }
     
     // Get total count
-    const [totalCount] = await executeWithRetry(`
-      SELECT COUNT(*) as total
-      FROM payments
-      WHERE tenant_id = ? AND payment_type = 'rent'
-    `, [tenant_id]);
+    let total = 0;
+    try {
+      const [totalCount] = await executeWithRetry(`
+        SELECT COUNT(*) as total
+        FROM payments
+        WHERE tenant_id = ? AND payment_type = 'rent'
+      `, [tenant_id]);
+      total = totalCount[0]?.total || 0;
+    } catch (countErr) {
+      console.warn('Count query failed, defaulting total to 0:', countErr.message);
+      total = 0;
+    }
 
     // Get payments with pagination
-    const [payments] = await executeWithRetry(`
-      SELECT 
-        payment_id,
-        amount,
-        late_fee_amount,
-        total_amount,
-        payment_date,
-        due_date,
-        payment_method,
-        transaction_id,
-        status,
-        remarks,
-        created_at,
-        updated_at
-      FROM payments
-      WHERE tenant_id = ? AND payment_type = 'rent'
-      ORDER BY payment_date DESC
-      LIMIT ? OFFSET ?
-    `, [tenant_id, limit, offset]);
+    let payments = [];
+    try {
+      const [rows] = await executeWithRetry(`
+        SELECT 
+          payment_id,
+          amount,
+          late_fee_amount,
+          total_amount,
+          payment_date,
+          due_date,
+          payment_method,
+          transaction_id,
+          status,
+          remarks,
+          created_at,
+          updated_at
+        FROM payments
+        WHERE tenant_id = ? AND payment_type = 'rent'
+        ORDER BY payment_date DESC
+        LIMIT ? OFFSET ?
+      `, [tenant_id, limit, offset]);
+      payments = rows || [];
+    } catch (listErr) {
+      console.warn('Payments query failed, returning empty list:', listErr.message);
+      payments = [];
+    }
 
     // Get payment statistics
-    const [stats] = await executeWithRetry(`
-      SELECT 
-        COUNT(*) as total_payments,
-        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_payments,
-        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_payments,
-        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_payments,
-        SUM(amount) as total_amount,
-        AVG(amount) as average_amount,
-        SUM(late_fee_amount) as total_late_fees
-      FROM payments
-      WHERE tenant_id = ? AND payment_type = 'rent'
-    `, [tenant_id]);
+    let statistics = {};
+    try {
+      const [stats] = await executeWithRetry(`
+        SELECT 
+          COUNT(*) as total_payments,
+          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_payments,
+          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_payments,
+          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_payments,
+          SUM(amount) as total_amount,
+          AVG(amount) as average_amount,
+          SUM(late_fee_amount) as total_late_fees
+        FROM payments
+        WHERE tenant_id = ? AND payment_type = 'rent'
+      `, [tenant_id]);
+      statistics = stats[0] || {};
+    } catch (statsErr) {
+      console.warn('Stats query failed, returning empty stats:', statsErr.message);
+      statistics = {};
+    }
 
     res.json({ 
-      payments: payments || [],
+      payments: payments,
       pagination: {
-        total: totalCount[0]?.total || 0,
+        total: total,
         page,
         limit,
-        totalPages: Math.ceil((totalCount[0]?.total || 0) / limit)
+        totalPages: Math.ceil(total / limit)
       },
-      statistics: stats[0] || {}
+      statistics
     });
   } catch (error) {
     console.error('Error fetching payment history:', error);
