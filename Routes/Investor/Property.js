@@ -59,6 +59,24 @@ router.post("/add/property", async (req, res) => {
   }
 });
 
+// Delete property by id
+router.delete("/properties/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!id) return res.status(400).json({ error: "Missing property id" });
+
+    // Optionally: enforce investor ownership using token in future
+    const [result] = await db.execute("DELETE FROM property WHERE property_id = ?", [id]);
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: "Property not found" });
+    }
+    return res.json({ message: "Property deleted" });
+  } catch (error) {
+    console.error("Delete property error:", error);
+    return res.status(500).json({ error: "Internal server error" });
+  }
+});
+
 // /Routes/Investor/Property.js
 router.get("/properties", async (req, res) => {
   const investor_id = req.query.investor_id;
