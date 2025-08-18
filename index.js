@@ -23,6 +23,7 @@ import { EnhancedPaymentsRouter } from "./Routes/Investor/EnhancedPayments.js";
 
 import { DocumentsRouter } from "./Routes/Investor/Documents.js";
 import { ProfileRouter } from "./Routes/Investor/Profile.js";
+import { SettingsRouter } from "./Routes/Investor/Settings.js";
 
 // Import common messaging router
 import { MessagingRouter as CommonMessagingRouter } from "./Routes/Messaging.js";
@@ -132,6 +133,7 @@ app.use("/api/payments", EnhancedPaymentsRouter);
 
 app.use("/investor/documents", DocumentsRouter);
 app.use("/investor", ProfileRouter);
+app.use("/investor", SettingsRouter);
 
 // Add common messaging routes
 app.use("/messaging", CommonMessagingRouter);
