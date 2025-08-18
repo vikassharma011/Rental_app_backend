@@ -62,18 +62,25 @@ router.get("/tenant", authenticateInvestor, async (req, res) => {
 });
 
 
-// ✅ GET Tenant Requests (Inactive)
-router.get("/tenant-requests", async (req, res) => {
-  const [rows] = await db.execute(
-    `SELECT user_id, first_name, last_name, email, phone FROM users 
-     WHERE role = 'tenant' AND is_active = false`
-  );
-  res.json(rows);
+// ✅ GET Tenant Requests (Pending or Inactive)
+router.get("/tenant-requests", authenticateInvestor, async (req, res) => {
+  try {
+    const [rows] = await db.execute(
+      `SELECT user_id, first_name, last_name, email, phone, status, is_active
+       FROM users 
+       WHERE role = 'tenant' AND (status <> 'approved' OR is_active = false)
+       ORDER BY created_at DESC`
+    );
+    res.json(rows);
+  } catch (error) {
+    console.error("Error fetching tenant requests:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
 });
 
 
 // ✅ Approve or Reject Tenant
-router.post("/tenant-requests/:id/:action", async (req, res) => {
+router.post("/tenant-requests/:id/:action", authenticateInvestor, async (req, res) => {
   const { id, action } = req.params;
   // Fetch tenant info
   const [rows] = await db.execute(`SELECT email, first_name FROM users WHERE user_id = ? AND role = 'tenant'`, [id]);
