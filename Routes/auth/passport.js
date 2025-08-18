@@ -10,7 +10,7 @@ passport.use(
     {
       clientID: process.env.GOOGLE_CLIENT_ID,
       clientSecret: process.env.GOOGLE_CLIENT_SECRET,
-      callbackURL: "https://rentalappbackend-production.up.railway.app/auth/google/callback"
+      callbackURL: "https://artistic-wonder-production-a4f8.up.railway.app/auth/google/callback"
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
