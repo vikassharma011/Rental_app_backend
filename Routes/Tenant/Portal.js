@@ -882,7 +882,7 @@ router.get("/rent-status/:id", async (req, res) => {
       return res.status(400).json({ error: 'Invalid tenant ID' });
     }
     
-    // Get current rent status
+    // Get current rent status - prefer a PAID schedule for current month if multiple exist
     const [rentStatus] = await executeWithRetry(`
       SELECT 
         l.lease_id,
@@ -899,14 +899,23 @@ router.get("/rent-status/:id", async (req, res) => {
         rs.due_date as schedule_due_date,
         rs.amount as schedule_amount,
         rs.late_fee_amount,
-        rs.total_due
+        rs.total_due,
+        rs.updated_at
       FROM leases l
       LEFT JOIN property p ON l.property_id = p.property_id
       LEFT JOIN rent_schedules rs ON l.lease_id = rs.lease_id
+        AND rs.month_year = DATE_FORMAT(CURDATE(), '%Y-%m')
       WHERE l.tenant_id = ? 
-      AND l.end_date >= CURDATE()
-      AND (rs.month_year = DATE_FORMAT(CURDATE(), '%Y-%m') OR rs.month_year IS NULL)
-      ORDER BY l.start_date DESC
+        AND l.end_date >= CURDATE()
+      ORDER BY 
+        CASE 
+          WHEN rs.status = 'paid' THEN 0
+          WHEN rs.status IN ('pending','due') THEN 1
+          WHEN rs.status = 'overdue' THEN 2
+          ELSE 3
+        END,
+        rs.updated_at DESC,
+        l.start_date DESC
       LIMIT 1
     `, [tenant_id]);
 
@@ -926,16 +935,16 @@ router.get("/rent-status/:id", async (req, res) => {
       lease_id: status.lease_id,
       property_title: status.property_title,
       property_address: status.address,
-      rent_amount: status.rent_amount,
+      rent_amount: Number(status.rent_amount) || 0,
       due_date: status.schedule_due_date || status.due_date,
       days_until_due: daysUntilDue,
       payment_status: status.payment_status || 'pending',
-      late_fee: status.late_fee,
-      late_fee_percentage: status.late_fee_percentage,
+      late_fee: Number(status.late_fee) || 0,
+      late_fee_percentage: Number(status.late_fee_percentage) || 0,
       grace_period_days: status.grace_period_days,
       is_overdue: daysUntilDue < 0,
       is_due_soon: daysUntilDue <= 7 && daysUntilDue >= 0,
-      total_due: status.total_due || status.rent_amount
+      total_due: Number(status.total_due ?? status.rent_amount) || 0
     };
 
     res.json({ rentStatus: rentStatusInfo });
