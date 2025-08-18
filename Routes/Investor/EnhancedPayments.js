@@ -325,7 +325,7 @@ router.post("/tenant/pay-rent", authenticateUser, async (req, res) => {
     if (scheduleToUpdate) {
       await db.execute(`
         UPDATE rent_schedules 
-        SET status = 'paid', payment_id = ?, late_fee_amount = ?
+        SET status = 'paid', payment_id = ?, late_fee_amount = ?, total_due = 0
         WHERE schedule_id = ?
       `, [paymentId, lateFeeAmount, scheduleToUpdate]);
       
@@ -347,9 +347,29 @@ router.post("/tenant/pay-rent", authenticateUser, async (req, res) => {
         dueDate,
         lease.rent_amount,
         lateFeeAmount,
-        totalAmount,
+        0,
         paymentId
       ]);
+    }
+
+    // Ensure next month's schedule exists and is pending
+    try {
+      const baseDate = new Date();
+      const nextMonthYear = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 1)
+        .toISOString().slice(0, 7);
+      const nextDueDate = new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, lease.due_date || 1)
+        .toISOString().slice(0, 10);
+      const [[existsNext]] = await db.execute(`
+        SELECT schedule_id FROM rent_schedules WHERE lease_id = ? AND month_year = ?
+      `, [lease_id, nextMonthYear]);
+      if (!existsNext) {
+        await db.execute(`
+          INSERT INTO rent_schedules (lease_id, month_year, due_date, amount, status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 'pending', NOW(), NOW())
+        `, [lease_id, nextMonthYear, nextDueDate, lease.rent_amount]);
+      }
+    } catch (e) {
+      console.warn('Failed to create next month schedule (non-critical):', e.message);
     }
 
     res.status(201).json({
