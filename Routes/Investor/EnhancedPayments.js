@@ -305,7 +305,7 @@ router.post("/tenant/pay-rent", authenticateUser, async (req, res) => {
 
     const paymentId = paymentResult.insertId;
 
-    // Update rent schedule - find the current month's pending schedule if not provided
+    // Update rent schedule - find or create the current month's schedule if not provided
     let scheduleToUpdate = schedule_id;
     if (!scheduleToUpdate) {
       // Find the current month's pending rent schedule
@@ -331,7 +331,25 @@ router.post("/tenant/pay-rent", authenticateUser, async (req, res) => {
       
       console.log(`Updated rent schedule ${scheduleToUpdate} to paid status`);
     } else {
-      console.log('No rent schedule found to update');
+      console.log('No rent schedule found to update, creating paid schedule for current month.');
+      // Create a paid schedule for the current month so tenant portal reflects the payment
+      const today = new Date();
+      const monthYear = today.toISOString().slice(0, 7);
+      const dueDate = new Date(today.getFullYear(), today.getMonth(), lease.due_date || 1)
+        .toISOString().slice(0, 10);
+      await db.execute(`
+        INSERT INTO rent_schedules (
+          lease_id, month_year, due_date, amount, late_fee_amount, total_due, status, payment_id, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'paid', ?, NOW(), NOW())
+      `, [
+        lease_id,
+        monthYear,
+        dueDate,
+        lease.rent_amount,
+        lateFeeAmount,
+        totalAmount,
+        paymentId
+      ]);
     }
 
     res.status(201).json({
