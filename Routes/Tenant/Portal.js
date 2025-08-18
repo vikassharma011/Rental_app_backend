@@ -97,6 +97,80 @@ const upload = multer({
   }
 });
 
+// Dev seeding endpoint to create test data for a tenant (protected by DEV_SEED_KEY env)
+router.post("/dev/seed", async (req, res) => {
+  try {
+    const devKey = req.headers["x-dev-seed-key"] || req.query.key;
+    if ((process.env.DEV_SEED_KEY || 'allow-local') !== devKey) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    const { tenant_id, property_id, rent_amount = 8000, due_day = 5 } = req.body;
+    if (!tenant_id || !property_id) {
+      return res.status(400).json({ error: "tenant_id and property_id are required" });
+    }
+
+    // 1) Ensure lease exists (active this month)
+    const startDate = new Date();
+    startDate.setDate(1);
+    const endDate = new Date(startDate.getFullYear(), startDate.getMonth(), 28);
+    const startStr = startDate.toISOString().slice(0,10);
+    const endStr = endDate.toISOString().slice(0,10);
+
+    await executeWithRetry(`
+      INSERT INTO leases (tenant_id, property_id, start_date, end_date, rent_amount, due_date, late_fee, late_fee_percentage, grace_period_days, auto_late_fee, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, 5.00, 5, 1, NOW(), NOW())
+    `, [tenant_id, property_id, rent_amount, startStr, endStr, due_day]);
+
+    // Get latest lease
+    const [[lease]] = await executeWithRetry(`
+      SELECT * FROM leases WHERE tenant_id = ? ORDER BY start_date DESC LIMIT 1
+    `, [tenant_id]);
+    const lease_id = lease.lease_id;
+
+    // 2) Create current month pending rent schedule if missing
+    const currentMonth = new Date().toISOString().slice(0,7);
+    await executeWithRetry(`
+      INSERT INTO rent_schedules (lease_id, month_year, due_date, amount, late_fee_amount, total_due, status, created_at, updated_at)
+      SELECT ?, ?, ?, ?, 0.00, ?, 'pending', NOW(), NOW()
+      WHERE NOT EXISTS (
+        SELECT 1 FROM rent_schedules WHERE lease_id = ? AND month_year = ?
+      )
+    `, [lease_id, currentMonth, `${currentMonth}-` + String(due_day).padStart(2,'0'), rent_amount, rent_amount, lease_id, currentMonth]);
+
+    // 3) Ensure default card method
+    await executeWithRetry(`
+      INSERT INTO tenant_payment_methods (tenant_id, payment_type, card_last4, is_default, is_active, created_at, updated_at)
+      VALUES (?, 'card', '4242', 1, 1, NOW(), NOW())
+    `, [tenant_id]).catch(() => {});
+
+    // Fetch method_id
+    const [[method]] = await executeWithRetry(`
+      SELECT method_id FROM tenant_payment_methods WHERE tenant_id = ? AND payment_type = 'card' ORDER BY is_default DESC, created_at DESC LIMIT 1
+    `, [tenant_id]);
+
+    // 4) Upsert auto-pay using that method
+    const [existing] = await executeWithRetry(`
+      SELECT setting_id FROM auto_pay_settings WHERE tenant_id = ? AND lease_id = ?
+    `, [tenant_id, lease_id]);
+    if (existing.length > 0) {
+      await executeWithRetry(`
+        UPDATE auto_pay_settings SET payment_method_id = ?, is_active = 1, auto_pay_date = ?, updated_at = NOW()
+        WHERE tenant_id = ? AND lease_id = ?
+      `, [method.method_id, due_day, tenant_id, lease_id]);
+    } else {
+      await executeWithRetry(`
+        INSERT INTO auto_pay_settings (tenant_id, lease_id, payment_method_id, is_active, auto_pay_date, created_at, updated_at)
+        VALUES (?, ?, ?, 1, ?, NOW(), NOW())
+      `, [tenant_id, lease_id, method.method_id, due_day]);
+    }
+
+    res.json({ success: true, lease_id, payment_method_id: method.method_id });
+  } catch (error) {
+    console.error('Dev seed error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 // Simple authentication middleware for tenant
 function authenticateTenant(req, res, next) {
   const token = req.headers.authorization?.split(" ")[1];
@@ -1136,7 +1210,7 @@ router.get("/rent-schedules/:id", async (req, res) => {
   }
 });
 
-// Tenant inventory items (basic placeholder - align with your schema if different)
+// Tenant inventory items (aligned to schema: inventory_items)
 router.get("/inventory/:id", async (req, res) => {
   try {
     const tenant_id = parseInt(req.params.id);
@@ -1151,17 +1225,12 @@ router.get("/inventory/:id", async (req, res) => {
     );
     if (!lease) return res.json({ inventory: [] });
 
-    // If you have a property_inventory table use it, otherwise return empty list
-    try {
-      const [items] = await executeWithRetry(
-        `SELECT * FROM property_inventory WHERE property_id = ? ORDER BY created_at DESC`,
-        [lease.property_id]
-      );
-      res.json({ inventory: items || [] });
-    } catch (innerErr) {
-      console.warn('Inventory table missing or query failed, returning empty list');
-      res.json({ inventory: [] });
-    }
+    const [items] = await executeWithRetry(
+      `SELECT item_id, item_name, item_type, purchase_date, warranty_end_date, supplier_id, created_at, updated_at
+       FROM inventory_items WHERE property_id = ? ORDER BY created_at DESC`,
+      [lease.property_id]
+    );
+    res.json({ inventory: items || [] });
   } catch (error) {
     console.error('Error fetching tenant inventory:', error);
     res.status(500).json({ error: error.message });
