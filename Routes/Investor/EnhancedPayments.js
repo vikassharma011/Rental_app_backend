@@ -1165,10 +1165,11 @@ router.get("/investor/dashboard/:userId", async (req, res) => {
     const userId = req.params.userId;
     // Join payments -> leases -> property
     const [payments] = await db.execute(
-      `SELECT p.*, pr.investor_id
+      `SELECT p.*, pr.investor_id, u.first_name AS tenant_first_name, u.last_name AS tenant_last_name
        FROM payments p
        JOIN leases l ON p.lease_id = l.lease_id
        JOIN property pr ON l.property_id = pr.property_id
+       LEFT JOIN users u ON p.tenant_id = u.user_id
        WHERE pr.investor_id = ?`,
       [userId]
     );
