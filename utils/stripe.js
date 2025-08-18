@@ -58,6 +58,25 @@ export const confirmPayment = async (paymentIntentId) => {
   }
 };
 
+// Create a SetupIntent to collect and save a payment method for future use
+export const createSetupIntent = async (customerId = null, paymentMethodTypes = ['card']) => {
+  try {
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId || undefined,
+      payment_method_types: paymentMethodTypes,
+      usage: 'off_session'
+    });
+    return {
+      success: true,
+      clientSecret: setupIntent.client_secret,
+      setupIntentId: setupIntent.id,
+    };
+  } catch (error) {
+    console.error('Error creating setup intent:', error);
+    return { success: false, error: error.message };
+  }
+};
+
 export const createCustomer = async (email, name) => {
   try {
     const customer = await stripe.customers.create({

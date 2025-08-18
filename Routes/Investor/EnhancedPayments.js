@@ -1,6 +1,6 @@
 import express from "express";
 import { db } from "../../db.js";
-import { createPaymentIntent, confirmPayment, createCustomer, createPaymentMethod, attachPaymentMethodToCustomer } from "../../utils/stripe.js";
+import { createPaymentIntent, confirmPayment, createCustomer, createPaymentMethod, attachPaymentMethodToCustomer, createSetupIntent } from "../../utils/stripe.js";
 import jwt from "jsonwebtoken";
 import Stripe from "stripe";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
@@ -388,6 +388,19 @@ router.post("/stripe/create-rent-payment-intent", authenticateUser, async (req, 
   }
 });
 
+// Create a Stripe SetupIntent for saving a tenant payment method
+router.post("/stripe/create-setup-intent", authenticateUser, async (req, res) => {
+  try {
+    const { customer_id } = req.body;
+    const result = await createSetupIntent(customer_id || null);
+    if (!result.success) return res.status(400).json({ error: result.error });
+    res.json({ success: true, client_secret: result.clientSecret, setup_intent_id: result.setupIntentId });
+  } catch (error) {
+    console.error('Error creating setup intent:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Confirm a Stripe PaymentIntent and return its status
 router.post("/stripe/confirm-payment", authenticateUser, async (req, res) => {
   try {
@@ -398,6 +411,41 @@ router.post("/stripe/confirm-payment", authenticateUser, async (req, res) => {
     res.json({ success: true, payment_intent: result.paymentIntent, transaction_id: result.transactionId });
   } catch (error) {
     console.error('Error confirming payment:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Save a verified card from a completed SetupIntent into tenant_payment_methods
+router.post("/stripe/save-payment-method", authenticateUser, async (req, res) => {
+  try {
+    const { tenant_id, setup_intent_id, set_default } = req.body;
+    if (!tenant_id || !setup_intent_id) {
+      return res.status(400).json({ error: "tenant_id and setup_intent_id are required" });
+    }
+
+    const setupIntent = await stripe.setupIntents.retrieve(setup_intent_id, { expand: ['payment_method'] });
+    if (setupIntent.status !== 'succeeded') {
+      return res.status(400).json({ error: `SetupIntent not succeeded. Status: ${setupIntent.status}` });
+    }
+    const pm = setupIntent.payment_method;
+    if (!pm || pm.type !== 'card') {
+      return res.status(400).json({ error: 'Unsupported or missing payment method' });
+    }
+    const last4 = pm.card?.last4 || null;
+
+    if (set_default) {
+      await db.execute(`UPDATE tenant_payment_methods SET is_default = 0 WHERE tenant_id = ?`, [tenant_id]);
+    }
+
+    const [ins] = await db.execute(
+      `INSERT INTO tenant_payment_methods (tenant_id, payment_type, card_last4, is_default, is_active, created_at, updated_at)
+       VALUES (?, 'card', ?, ?, 1, NOW(), NOW())`,
+      [tenant_id, last4, set_default ? 1 : 0]
+    );
+
+    res.json({ success: true, method_id: ins.insertId, last4 });
+  } catch (error) {
+    console.error('Error saving payment method:', error);
     res.status(500).json({ error: error.message });
   }
 });
