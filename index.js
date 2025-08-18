@@ -66,7 +66,8 @@ app.use(cors({
     "https://localhost:3000",
     "http://127.0.0.1:3000",
     "https://127.0.0.1:3000",
-    "https://artistic-wonder-production-a4f8.up.railway.app"
+    "https://artistic-wonder-production-a4f8.up.railway.app",
+    "*"
   ],
   credentials: true,
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
