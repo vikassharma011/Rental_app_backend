@@ -52,11 +52,16 @@ router.get("/profile/:id", async (req, res) => {
       [id]
     );
 
-    // Get active leases count
+    // Get active leases (derive status since leases table has no explicit status column)
     const [leases] = await db.execute(
-      `SELECT l.lease_id, l.rent_amount, l.end_date, l.status,
-              p.title as property_title, p.city,
-              CONCAT(u.first_name, ' ', u.last_name) as tenant_name
+      `SELECT 
+         l.lease_id, 
+         l.rent_amount, 
+         l.end_date, 
+         CASE WHEN l.end_date >= CURDATE() THEN 'active' ELSE 'expired' END AS status,
+         p.title as property_title, 
+         p.city,
+         CONCAT(u.first_name, ' ', u.last_name) as tenant_name
        FROM leases l
        JOIN property p ON l.property_id = p.property_id
        JOIN users u ON l.tenant_id = u.user_id
